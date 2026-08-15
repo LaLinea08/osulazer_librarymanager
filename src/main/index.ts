@@ -6,11 +6,13 @@ import {
   clipboard,
   dialog,
   ipcMain,
+  nativeTheme,
   shell,
   type IpcMainInvokeEvent,
 } from "electron";
 import type {
   AppSettings,
+  AppTheme,
   DeletionPolicy,
   FilterGroup,
   LibraryCapabilities,
@@ -18,6 +20,7 @@ import type {
   ScanProgress,
   SerializableSelection,
 } from "../shared/contracts";
+import { DEFAULT_APP_THEME } from "../shared/contracts";
 import { BUILD_INFO } from "../shared/build-info.generated";
 import { IPC } from "../shared/ipc";
 import { AppDatabase, isSqliteAvailable } from "./database";
@@ -41,6 +44,24 @@ let deletionManager: DeletionManager | null = null;
 const logger = new StructuredLogger(
   join(app.getPath("userData"), "logs", "app.log"),
 );
+
+const WINDOW_BACKGROUNDS: Record<Exclude<AppTheme, "system">, string> = {
+  light: "#cfd2cd",
+  dark: "#111311",
+};
+
+function nativeBackgroundColor(): string {
+  return WINDOW_BACKGROUNDS[nativeTheme.shouldUseDarkColors ? "dark" : "light"];
+}
+
+function applyNativeTheme(theme: AppTheme = DEFAULT_APP_THEME): string {
+  nativeTheme.themeSource = theme;
+  const background = nativeBackgroundColor();
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.setBackgroundColor(background);
+  }
+  return background;
+}
 
 process.on("uncaughtException", (error) => {
   logger.write("error", "process.uncaught-exception", errorDetails(error));
@@ -255,8 +276,13 @@ function registerIpc(): void {
     requireDatabase().getStatistics(filters),
   );
   ipcMain.handle(IPC.getSettings, () => requireDatabase().getSettings());
-  ipcMain.handle(IPC.updateSettings, (_event, settings: Partial<AppSettings>) =>
-    requireDatabase().updateSettings(settings),
+  ipcMain.handle(
+    IPC.updateSettings,
+    (_event, settings: Partial<AppSettings>) => {
+      const updated = requireDatabase().updateSettings(settings);
+      applyNativeTheme(updated.theme);
+      return updated;
+    },
   );
   ipcMain.handle(IPC.getSavedSearches, () =>
     requireDatabase().getSavedSearches(),
@@ -425,13 +451,15 @@ function registerIpc(): void {
 
 function createWindow(): void {
   logger.write("info", "window.creating");
+  const initialTheme = requireDatabase().getSettings().theme;
+  const backgroundColor = applyNativeTheme(initialTheme);
   mainWindow = new BrowserWindow({
     width: 1500,
     height: 920,
     minWidth: 1120,
     minHeight: 700,
     show: false,
-    backgroundColor: "#cfd2cd",
+    backgroundColor,
     autoHideMenuBar: true,
     title: "osu!lazer Library Manager",
     webPreferences: {
@@ -473,10 +501,14 @@ function createWindow(): void {
 
   if (isDevelopment && process.env.ELECTRON_RENDERER_URL) {
     logger.write("info", "renderer.loading-development-url");
-    void mainWindow.loadURL(process.env.ELECTRON_RENDERER_URL);
+    const rendererUrl = new URL(process.env.ELECTRON_RENDERER_URL);
+    rendererUrl.searchParams.set("theme", initialTheme);
+    void mainWindow.loadURL(rendererUrl.toString());
   } else {
     logger.write("info", "renderer.loading-packaged-file");
-    void mainWindow.loadFile(join(currentDirectory, "../renderer/index.html"));
+    void mainWindow.loadFile(join(currentDirectory, "../renderer/index.html"), {
+      query: { theme: initialTheme },
+    });
   }
 }
 
@@ -489,6 +521,16 @@ app.on("second-instance", () => {
   if (mainWindow.isMinimized()) mainWindow.restore();
   mainWindow.show();
   mainWindow.focus();
+});
+
+nativeTheme.on("updated", () => {
+  if (
+    database?.getSettings().theme === "system" &&
+    mainWindow &&
+    !mainWindow.isDestroyed()
+  ) {
+    mainWindow.setBackgroundColor(nativeBackgroundColor());
+  }
 });
 
 logger.write("info", "app.module-loaded", {

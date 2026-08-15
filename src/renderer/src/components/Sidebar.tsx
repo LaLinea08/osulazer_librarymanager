@@ -181,9 +181,10 @@ export function Sidebar({
           className="rail-brand"
           role="img"
         >
-          <div className="brand-mark" aria-hidden="true">
-            <span />
-          </div>
+          <span className="product-monogram" aria-hidden="true">
+            <span>o</span>
+            <b>!</b>
+          </span>
         </div>
         <nav className="rail-navigation" aria-label="Workspace shortcuts">
           <RailButton
@@ -251,7 +252,7 @@ export function Sidebar({
           </div>
           <div className="library-identity-copy">
             <span>Connected library</span>
-            <strong>osu!lazer</strong>
+            <strong className="product-wordmark-core">osu!lazer</strong>
             <small title={configuredPath}>{libraryFolder}</small>
           </div>
         </header>

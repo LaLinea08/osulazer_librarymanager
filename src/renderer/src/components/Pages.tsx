@@ -44,8 +44,8 @@ export function StoragePage({
     <div className="page-scroll content-page">
       <div className="page-intro">
         <div>
-          <span className="eyebrow">Analysis</span>
-          <h1>Storage analyzer</h1>
+          <span className="eyebrow">Storage</span>
+          <h1>Storage analysis</h1>
           <p>
             Logical resource sizes from osu!lazer’s content-addressed file
             store.
@@ -89,7 +89,7 @@ export function StoragePage({
         <section className="dashboard-card explanation-card">
           <Database size={21} />
           <div>
-            <h3>What is counted</h3>
+            <h3>Included in the total</h3>
             <p>
               Every distinct SHA-256 blob referenced by a beatmap set, including
               charts, audio, backgrounds, video, and storyboard resources.
@@ -99,7 +99,7 @@ export function StoragePage({
         <section className="dashboard-card explanation-card">
           <ShieldAlert size={21} />
           <div>
-            <h3>What is not claimed</h3>
+            <h3>Not a reclaim estimate</h3>
             <p>
               Reclaimable space. A blob can be shared across sets or referenced
               by scores, skins, and other osu!lazer models.
@@ -167,11 +167,9 @@ export function CleanupPage({ onPreset }: CleanupPageProps): React.JSX.Element {
     <div className="page-scroll content-page">
       <div className="page-intro">
         <div>
-          <span className="eyebrow">Smart cleanup</span>
-          <h1>Find clutter. Decide deliberately.</h1>
-          <p>
-            Presets only create reviewable filters. They never delete anything.
-          </p>
+          <span className="eyebrow">Filters</span>
+          <h1>Cleanup presets</h1>
+          <p>Open a filtered library view for review. Nothing is deleted.</p>
         </div>
       </div>
       <div className="preset-grid">
@@ -199,7 +197,7 @@ export function CleanupPage({ onPreset }: CleanupPageProps): React.JSX.Element {
       <div className="safety-banner">
         <Trash2 size={19} />
         <div>
-          <strong>Cleanup always opens a protected review</strong>
+          <strong>Deletion remains a separate review</strong>
           <span>
             A preset only selects candidates. Deletion still requires a fresh
             whole-set preview, verified backup, and exact confirmation phrase.
@@ -267,8 +265,8 @@ export function QuarantinePage({
           <span className="eyebrow">Recovery</span>
           <h1>Quarantine &amp; restore</h1>
           <p>
-            Verified recovery backups for protected deletions, including the
-            window in which queued deletion can still be undone automatically.
+            Review verified backups and restore queued sets before osu!lazer
+            processes them.
           </p>
         </div>
         <button
@@ -285,7 +283,7 @@ export function QuarantinePage({
       <div className="quarantine-warning">
         <ShieldAlert size={21} />
         <div>
-          <strong>Automatic restore has a strict time window</strong>
+          <strong>Restore before opening osu!lazer</strong>
           <span>
             Restore before osu!lazer starts and processes{" "}
             <code>DeletePending</code>. After osu!lazer removes its Realm rows,
@@ -423,12 +421,9 @@ export function HistoryPage({
     <div className="page-scroll content-page">
       <div className="page-intro">
         <div>
-          <span className="eyebrow">Audit trail</span>
+          <span className="eyebrow">Local log</span>
           <h1>Operation history</h1>
-          <p>
-            Every scan, protected deletion, restore, and failure is recorded in
-            the manager’s own database.
-          </p>
+          <p>Scans, deletions, restores, and failures stored by this app.</p>
         </div>
       </div>
       <section className="history-list">
@@ -489,10 +484,7 @@ export function SettingsPage({
         <div>
           <span className="eyebrow">Preferences</span>
           <h1>Settings</h1>
-          <p>
-            Library discovery, interface preferences, safety state, and build
-            identity.
-          </p>
+          <p>Configure the indexed library and interface.</p>
         </div>
       </div>
       <section className="settings-section">
@@ -538,9 +530,33 @@ export function SettingsPage({
           <HardDrive size={19} />
           <div>
             <h2>Interface</h2>
-            <p>Choose how much information fits on screen.</p>
+            <p>Application theme and table spacing.</p>
           </div>
         </header>
+        <div className="setting-row">
+          <div>
+            <strong>Theme</strong>
+            <span>Applied across the application.</span>
+          </div>
+          <fieldset className="segmented-control theme-selector">
+            <legend className="sr-only">Application theme</legend>
+            {(["light", "dark", "system"] as const).map((theme) => (
+              <label
+                className={`segment-option${settings.theme === theme ? " selected" : ""}`}
+                key={theme}
+              >
+                <input
+                  checked={settings.theme === theme}
+                  name="application-theme"
+                  onChange={() => void onUpdate({ theme })}
+                  type="radio"
+                  value={theme}
+                />
+                <span>{titleCase(theme)}</span>
+              </label>
+            ))}
+          </fieldset>
+        </div>
         <div className="setting-row">
           <div>
             <strong>Table density</strong>
@@ -580,7 +596,7 @@ export function SettingsPage({
           <ShieldCheck size={19} />
           <div>
             <h2>Safety</h2>
-            <p>Capability gates are derived from the verified adapter.</p>
+            <p>Actions available for the current library adapter.</p>
           </div>
         </header>
         <div className="capability-list">
@@ -609,15 +625,26 @@ export function SettingsPage({
           <Info size={19} />
           <div>
             <h2>About</h2>
-            <p>Useful identity for bug reports.</p>
+            <p>Version details for bug reports.</p>
           </div>
         </header>
         <div className="about-build">
-          <div className="brand-mark">
-            <span />
-          </div>
+          <span className="product-monogram" aria-hidden="true">
+            <span>o</span>
+            <b>!</b>
+          </span>
           <div>
-            <strong>osu!lazer Library Manager</strong>
+            <strong
+              aria-label="osu!lazer Library Manager"
+              className="product-wordmark"
+            >
+              <span aria-hidden="true" className="product-wordmark-core">
+                osu!lazer
+              </span>
+              <span aria-hidden="true" className="product-wordmark-label">
+                library manager
+              </span>
+            </strong>
             <code>Version {build.version}</code>
             <span>
               Commit {build.commit} · Built {formatDate(build.builtAt)}
@@ -641,14 +668,14 @@ export function FeaturePlaceholder({
     collections: {
       icon: Library,
       eyebrow: "Collections",
-      title: "Read-only collection support is next",
-      body: "The verified Realm reader can see collection membership. The comparison and management interface is being kept separate from the first safe browser release.",
+      title: "Collection tools unavailable",
+      body: "The library reader can see collection membership, but this version does not provide collection comparison or editing.",
     },
     duplicates: {
       icon: CopyCheck,
       eyebrow: "Duplicate finder",
-      title: "Confidence needs evidence",
-      body: "Exact hash, online ID, and metadata comparison will be added as an analysis-only workflow. Uncertain matches will always require manual review.",
+      title: "Duplicate analysis unavailable",
+      body: "This version does not compare hashes, online IDs, and metadata for duplicate review.",
     },
   }[type];
   const Icon = content.icon;
@@ -663,10 +690,10 @@ export function FeaturePlaceholder({
       <div className="safety-note">
         <ShieldCheck size={18} />
         <div>
-          <strong>No simulated support</strong>
+          <strong>Unavailable features stay disabled</strong>
           <span>
-            The application reports capability limits instead of pretending an
-            unsafe operation works.
+            The application reports capability limits and does not modify this
+            data.
           </span>
         </div>
       </div>

@@ -214,9 +214,13 @@ export interface OperationRecord {
   details: string | null;
 }
 
+export type AppTheme = "dark" | "light" | "system";
+
+export const DEFAULT_APP_THEME: AppTheme = "light";
+
 export interface AppSettings {
   libraryPath: string | null;
-  theme: "dark" | "light" | "system";
+  theme: AppTheme;
   density: "compact" | "comfortable";
   scanOnStartup: boolean;
   protectedWriteMode: true;

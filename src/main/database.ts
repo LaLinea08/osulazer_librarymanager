@@ -14,6 +14,7 @@ import type {
   QuarantineRecord,
   SavedSearch,
 } from "../shared/contracts";
+import { DEFAULT_APP_THEME } from "../shared/contracts";
 import type { SerializableSelection } from "../shared/contracts";
 import { compileWhere, sortColumns, type SqlValue } from "./query-compiler";
 
@@ -49,7 +50,7 @@ export interface DeletionSelectionResolution {
 
 const defaultSettings: AppSettings = {
   libraryPath: null,
-  theme: "dark",
+  theme: DEFAULT_APP_THEME,
   density: "comfortable",
   scanOnStartup: false,
   protectedWriteMode: true,
@@ -206,11 +207,40 @@ export class AppDatabase {
       VALUES (3, CURRENT_TIMESTAMP);
     `);
 
-    const insertSetting = this.database.prepare(
-      "INSERT OR IGNORE INTO settings(key, value) VALUES (?, ?)",
-    );
-    for (const [key, value] of Object.entries(defaultSettings)) {
-      insertSetting.run(key, JSON.stringify(value));
+    this.database.exec("BEGIN IMMEDIATE");
+    try {
+      const themeMigrationApplied = Boolean(
+        this.database
+          .prepare("SELECT 1 FROM schema_migrations WHERE version = 4")
+          .get(),
+      );
+      if (!themeMigrationApplied) {
+        // Older releases seeded `dark` even though their interface was always
+        // light and offered no working theme control. Preserve what existing
+        // users actually saw on the first upgrade; the version marker makes
+        // every subsequent explicit dark/light/system choice durable.
+        this.database
+          .prepare(
+            "UPDATE settings SET value = ? WHERE key = 'theme' AND value = ?",
+          )
+          .run(JSON.stringify(DEFAULT_APP_THEME), JSON.stringify("dark"));
+      }
+
+      const insertSetting = this.database.prepare(
+        "INSERT OR IGNORE INTO settings(key, value) VALUES (?, ?)",
+      );
+      for (const [key, value] of Object.entries(defaultSettings)) {
+        insertSetting.run(key, JSON.stringify(value));
+      }
+      this.database
+        .prepare(
+          "INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES (4, CURRENT_TIMESTAMP)",
+        )
+        .run();
+      this.database.exec("COMMIT");
+    } catch (error) {
+      this.database.exec("ROLLBACK");
+      throw error;
     }
   }
 
@@ -686,10 +716,60 @@ export class AppDatabase {
       key: string;
       value: string;
     }>;
-    const values = Object.fromEntries(
-      rows.map((row) => [row.key, JSON.parse(row.value) as unknown]),
+    const values: AppSettings = { ...defaultSettings };
+    const repair = this.database.prepare(
+      "UPDATE settings SET value = ? WHERE key = ?",
     );
-    return { ...defaultSettings, ...values, protectedWriteMode: true };
+    const reset = (key: keyof AppSettings): void => {
+      repair.run(JSON.stringify(defaultSettings[key]), key);
+    };
+
+    for (const row of rows) {
+      let value: unknown;
+      try {
+        value = JSON.parse(row.value) as unknown;
+      } catch {
+        if (
+          ["libraryPath", "theme", "density", "scanOnStartup"].includes(row.key)
+        ) {
+          reset(row.key as keyof AppSettings);
+        }
+        continue;
+      }
+
+      switch (row.key) {
+        case "libraryPath":
+          if (value === null || typeof value === "string") {
+            values.libraryPath = value;
+          } else {
+            reset("libraryPath");
+          }
+          break;
+        case "theme":
+          if (value === "light" || value === "dark" || value === "system") {
+            values.theme = value;
+          } else {
+            reset("theme");
+          }
+          break;
+        case "density":
+          if (value === "compact" || value === "comfortable") {
+            values.density = value;
+          } else {
+            reset("density");
+          }
+          break;
+        case "scanOnStartup":
+          if (typeof value === "boolean") {
+            values.scanOnStartup = value;
+          } else {
+            reset("scanOnStartup");
+          }
+          break;
+      }
+    }
+
+    return { ...values, protectedWriteMode: true };
   }
 
   public updateSettings(patch: Partial<AppSettings>): AppSettings {
@@ -703,8 +783,16 @@ export class AppDatabase {
       "INSERT INTO settings(key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
     );
     for (const [key, value] of Object.entries(patch)) {
-      if (allowed.has(key as keyof AppSettings))
-        statement.run(key, JSON.stringify(value));
+      if (!allowed.has(key as keyof AppSettings)) continue;
+      if (
+        key === "theme" &&
+        value !== "light" &&
+        value !== "dark" &&
+        value !== "system"
+      ) {
+        continue;
+      }
+      statement.run(key, JSON.stringify(value));
     }
     return this.getSettings();
   }

@@ -14,6 +14,9 @@ const screenshots = {
   library: resolve("dist", "smoke-library.png"),
   deletionReview: resolve("dist", "smoke-deletion-review.png"),
   quarantine: resolve("dist", "smoke-quarantine.png"),
+  lightSettings: resolve("dist", "smoke-light-settings.png"),
+  darkSettings: resolve("dist", "smoke-dark-settings.png"),
+  darkDashboard: resolve("dist", "smoke-dark-dashboard.png"),
 };
 const userData = await mkdtemp(join(tmpdir(), "osu-library-manager-smoke-"));
 const environment = { ...process.env };
@@ -41,6 +44,17 @@ try {
   await page.waitForLoadState("domcontentloaded");
   await page.locator(".onboarding-card").waitFor({ state: "visible" });
   await page.screenshot({ path: screenshots.onboarding, fullPage: true });
+  const productFont = await page
+    .locator(".product-wordmark-core")
+    .evaluate((element) => globalThis.getComputedStyle(element).fontFamily);
+  const productFontLoaded = await page.evaluate(async () => {
+    await globalThis.document.fonts.ready;
+    return Array.from(globalThis.document.fonts).some(
+      (face) =>
+        face.family.replaceAll('"', "") === "Righteous" &&
+        face.status === "loaded",
+    );
+  });
 
   const detectedLibrary = page.getByRole("button", {
     name: "Use this library",
@@ -82,6 +96,47 @@ try {
     .waitFor({ state: "visible" });
   await page.screenshot({ path: screenshots.quarantine, fullPage: true });
 
+  await page.getByRole("button", { name: "Settings" }).click();
+  await page
+    .getByRole("heading", { name: "Settings" })
+    .waitFor({ state: "visible" });
+  const lightOption = page.getByRole("radio", { name: "Light" });
+  const initialTheme = await page.evaluate(() => ({
+    resolved: globalThis.document.documentElement.dataset.theme,
+    preference: globalThis.document.documentElement.dataset.themePreference,
+  }));
+  if (
+    !(await lightOption.isChecked()) ||
+    initialTheme.resolved !== "light" ||
+    initialTheme.preference !== "light"
+  ) {
+    throw new Error(
+      `Fresh profile did not start in Light: ${JSON.stringify(initialTheme)}`,
+    );
+  }
+  await page.screenshot({ path: screenshots.lightSettings, fullPage: true });
+  await page.getByRole("radio", { name: "System" }).check();
+  await page.waitForFunction(
+    () =>
+      globalThis.document.documentElement.dataset.themePreference === "system",
+  );
+  await page.getByRole("radio", { name: "Dark" }).check();
+  await page.waitForFunction(
+    () => globalThis.document.documentElement.dataset.theme === "dark",
+  );
+  await page.screenshot({ path: screenshots.darkSettings, fullPage: true });
+
+  // Reload the renderer to prove the preference is persisted by the main
+  // process rather than held only in React state.
+  await page.reload();
+  await page.locator(".summary-grid").waitFor({ state: "visible" });
+  await page.waitForFunction(
+    () =>
+      globalThis.document.documentElement.dataset.theme === "dark" &&
+      globalThis.document.documentElement.dataset.themePreference === "dark",
+  );
+  await page.screenshot({ path: screenshots.darkDashboard, fullPage: true });
+
   const realmAfter = realmPath ? await stat(realmPath).catch(() => null) : null;
   const sourceUnchanged =
     realmBefore === null ||
@@ -92,6 +147,14 @@ try {
   const result = {
     title: await page.title(),
     heading: await page.locator("h1").first().textContent(),
+    theme: await page.evaluate(() => ({
+      resolved: globalThis.document.documentElement.dataset.theme,
+      preference: globalThis.document.documentElement.dataset.themePreference,
+      bodyFont: globalThis.getComputedStyle(globalThis.document.body)
+        .fontFamily,
+    })),
+    productFont,
+    productFontLoaded,
     viewport: page.viewportSize(),
     screenshots,
     sourceRealm: realmPath,
@@ -102,6 +165,19 @@ try {
   if (!sourceUnchanged) {
     throw new Error(
       "The source client.realm metadata changed during the scan.",
+    );
+  }
+  if (
+    !/Helvetica/.test(result.theme.bodyFont) ||
+    !/Arial/.test(result.theme.bodyFont)
+  ) {
+    throw new Error(
+      `Unexpected interface font stack: ${result.theme.bodyFont}`,
+    );
+  }
+  if (!/Righteous/.test(productFont) || !productFontLoaded) {
+    throw new Error(
+      `Bundled product font was not active: ${productFont} (loaded: ${productFontLoaded})`,
     );
   }
   if (pageErrors.length > 0 || consoleErrors.length > 0) {

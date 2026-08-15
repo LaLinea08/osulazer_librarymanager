@@ -417,11 +417,11 @@ export function FilterBuilder({
       >
         <header className="modal-header">
           <div>
-            <span className="eyebrow">Advanced filters</span>
-            <h2 id="filter-builder-title">Build a precise library view</h2>
+            <span className="eyebrow">Library filter</span>
+            <h2 id="filter-builder-title">Filter conditions</h2>
             <p>
               Combine conditions with nested AND, OR, and NOT groups. Missing
-              metadata never becomes a fake zero.
+              metadata remains unavailable rather than becoming zero.
             </p>
           </div>
           <button

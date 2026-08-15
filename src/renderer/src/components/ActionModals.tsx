@@ -119,8 +119,8 @@ export function SaveSearchModal({
           </div>
           <div>
             <span className="eyebrow">Saved filter</span>
-            <h2>Name this library view</h2>
-            <p>Saved filters update dynamically after every successful scan.</p>
+            <h2>Save current filter</h2>
+            <p>The results update after each successful scan.</p>
           </div>
           <button
             aria-label="Close"

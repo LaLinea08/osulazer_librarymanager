@@ -11,6 +11,7 @@ import {
 import type {
   AppBuildInfo,
   AppSettings,
+  AppTheme,
   BeatmapDifficulty,
   DeletionResult,
   FilterCondition,
@@ -26,7 +27,7 @@ import type {
   SerializableSelection,
   SortField,
 } from "../../shared/contracts";
-import { EMPTY_FILTER_GROUP } from "../../shared/contracts";
+import { DEFAULT_APP_THEME, EMPTY_FILTER_GROUP } from "../../shared/contracts";
 import { parseQuickSearch } from "../../shared/quick-search";
 import {
   emptySelection,
@@ -80,6 +81,50 @@ const emptyCounts: Omit<LibraryQueryResult, "items"> = {
   filteredSets: 0,
   filteredBytes: 0,
 };
+
+function resolvedTheme(theme: AppTheme): Exclude<AppTheme, "system"> {
+  if (theme === "dark") return "dark";
+  if (
+    theme === "system" &&
+    typeof window !== "undefined" &&
+    typeof window.matchMedia === "function" &&
+    window.matchMedia("(prefers-color-scheme: dark)").matches
+  ) {
+    return "dark";
+  }
+  return "light";
+}
+
+function applyDocumentTheme(theme: AppTheme): void {
+  if (typeof document === "undefined") return;
+  const resolved = resolvedTheme(theme);
+  document.documentElement.dataset.theme = resolved;
+  document.documentElement.dataset.themePreference = theme;
+  document.documentElement.style.colorScheme = resolved;
+}
+
+function initialThemeFromLocation(): AppTheme {
+  if (typeof window === "undefined") return DEFAULT_APP_THEME;
+  const theme = new URLSearchParams(window.location.search).get("theme");
+  return theme === "light" || theme === "dark" || theme === "system"
+    ? theme
+    : DEFAULT_APP_THEME;
+}
+
+function rememberThemeInLocation(theme: AppTheme): void {
+  try {
+    const url = new URL(window.location.href);
+    if (url.searchParams.get("theme") === theme) return;
+    url.searchParams.set("theme", theme);
+    window.history.replaceState(window.history.state, "", url);
+  } catch {
+    // Some isolated test/document origins do not provide mutable history.
+  }
+}
+
+// The main process includes the persisted preference in the initial URL so the
+// correct palette is applied before React's first paint and settings IPC.
+applyDocumentTheme(initialThemeFromLocation());
 
 function quickGroup(conditions: FilterCondition[]): FilterGroup {
   return {
@@ -300,6 +345,20 @@ export function App(): React.JSX.Element {
       unsubscribe();
     };
   }, [refreshStatistics]);
+
+  useEffect(() => {
+    const theme = settings?.theme;
+    if (!theme) return;
+    applyDocumentTheme(theme);
+    rememberThemeInLocation(theme);
+    if (theme !== "system" || typeof window.matchMedia !== "function") {
+      return;
+    }
+    const preference = window.matchMedia("(prefers-color-scheme: dark)");
+    const handleChange = (): void => applyDocumentTheme("system");
+    preference.addEventListener("change", handleChange);
+    return () => preference.removeEventListener("change", handleChange);
+  }, [settings?.theme]);
 
   useEffect(() => {
     if (!toast) return;
@@ -587,8 +646,17 @@ export function App(): React.JSX.Element {
   if (loading) {
     return (
       <main className="startup-screen">
-        <div className="brand-mark large">
-          <span />
+        <div
+          aria-label="osu!lazer Library Manager"
+          className="product-wordmark startup-wordmark"
+          role="img"
+        >
+          <span aria-hidden="true" className="product-wordmark-core">
+            osu!lazer
+          </span>
+          <span aria-hidden="true" className="product-wordmark-label">
+            library manager
+          </span>
         </div>
         <LoaderCircle className="spin" size={24} />
         <span>Opening the local index…</span>
@@ -713,7 +781,7 @@ export function App(): React.JSX.Element {
           <section className="library-page">
             <div className="library-heading">
               <div>
-                <span className="eyebrow">Library browser</span>
+                <span className="eyebrow">Difficulty index</span>
                 <h1>{title}</h1>
               </div>
               <div

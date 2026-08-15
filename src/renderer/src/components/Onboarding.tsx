@@ -55,12 +55,23 @@ export function Onboarding({
       <div className="onboarding-glow glow-two" />
       <section className="onboarding-card">
         <header className="onboarding-brand">
-          <div className="brand-mark large">
-            <span />
-          </div>
+          <span className="product-monogram large" aria-hidden="true">
+            <span>o</span>
+            <b>!</b>
+          </span>
           <div>
-            <strong>osu!lazer Library Manager</strong>
-            <span>
+            <strong
+              aria-label="osu!lazer Library Manager"
+              className="product-wordmark"
+            >
+              <span aria-hidden="true" className="product-wordmark-core">
+                osu!lazer
+              </span>
+              <span aria-hidden="true" className="product-wordmark-label">
+                library manager
+              </span>
+            </strong>
+            <span className="build-label">
               {build.channel === "development"
                 ? "Development build"
                 : `Version ${build.version}`}
@@ -72,11 +83,10 @@ export function Onboarding({
             <span className="eyebrow">
               <Sparkles size={14} /> First launch
             </span>
-            <h1>Take control of your library. Safely.</h1>
+            <h1>Connect your osu!lazer library</h1>
             <p>
-              Search, inspect, and organize tens of thousands of osu!lazer
-              beatmaps from a fast local index. Protected deletion is isolated
-              behind verified backups and explicit confirmation.
+              Choose the osu!lazer data folder to build a local index for search
+              and review. Scanning does not write to the source library.
             </p>
             <ol className="onboarding-steps">
               <li className="active">
@@ -179,11 +189,10 @@ export function Onboarding({
             <div className="safety-note">
               <ShieldCheck size={18} />
               <div>
-                <strong>Safety-first by design</strong>
+                <strong>Protected deletion requirements</strong>
                 <span>
-                  Indexing is read-only. Protected whole-set deletion is enabled
-                  only after a verified scan, recovery backup, and explicit
-                  confirmation.
+                  Whole-set deletion is available only after a verified scan,
+                  recovery backup, and explicit confirmation.
                 </span>
               </div>
             </div>

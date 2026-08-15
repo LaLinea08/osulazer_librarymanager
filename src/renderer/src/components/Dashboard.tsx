@@ -105,12 +105,9 @@ export function Dashboard({
     <div className="page-scroll dashboard-page">
       <div className="page-intro dashboard-intro">
         <div>
-          <span className="eyebrow">Library overview</span>
-          <h1>Your beatmaps, clearly mapped.</h1>
-          <p>
-            Explore the indexed snapshot, then narrow the library without
-            touching osu!lazer’s internal data.
-          </p>
+          <span className="eyebrow">Library</span>
+          <h1>Overview</h1>
+          <p>Counts and distributions from the current local index.</p>
         </div>
         <button
           className="primary-button"
@@ -151,7 +148,7 @@ export function Dashboard({
               enabled: true,
             })
           }
-          subtitle="Click a mode to open its difficulties"
+          subtitle="Select a mode to filter the library"
           title="Game modes"
         />
         <Distribution
@@ -168,19 +165,19 @@ export function Dashboard({
               enabled: true,
             })
           }
-          subtitle="Online status persisted by osu!lazer"
+          subtitle="Status stored by osu!lazer"
           title="Ranked status"
         />
         <Distribution
           color="linear-gradient(90deg, #4fd7c8, #7ee7dd)"
           items={statistics?.byStarRange ?? []}
-          subtitle="Unavailable values are kept explicit"
+          subtitle="Base difficulty rating"
           title="Star rating"
         />
         <Distribution
           color="linear-gradient(90deg, #ffbd5c, #ffd18a)"
           items={statistics?.byBpmRange ?? []}
-          subtitle="Persisted base BPM values"
+          subtitle="Base BPM"
           title="BPM distribution"
         />
       </div>
@@ -191,21 +188,21 @@ export function Dashboard({
             <ShieldCheck size={27} />
           </div>
           <div>
-            <span className="eyebrow">Safety state</span>
-            <h3>Verified safety integration</h3>
+            <span className="eyebrow">Write safety</span>
+            <h3>Backup before every change</h3>
             <p>
-              Scans use an immutable Realm copy. Whole-set deletion requires a
-              fresh schema check, verified backup, and DeletePending write.
+              Scans use a Realm snapshot. Set deletion requires a current schema
+              check, verified backup, and DeletePending write.
             </p>
           </div>
         </section>
         <section className="dashboard-card index-card">
           <Database size={24} />
           <div>
-            <h3>Fast local index</h3>
+            <h3>Local index</h3>
             <p>
-              Searches and filters query the manager’s own SQLite database;
-              unchanged launches never rescan Realm.
+              Search and filters use the manager’s SQLite database. Unchanged
+              libraries are not rescanned at launch.
             </p>
           </div>
         </section>

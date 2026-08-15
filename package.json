@@ -25,6 +25,7 @@
     "smoke:packaged": "node scripts/smoke-packaged.mjs"
   },
   "dependencies": {
+    "@fontsource/righteous": "5.3.0",
     "@tanstack/react-virtual": "3.14.9",
     "lucide-react": "1.31.0",
     "react": "19.2.8",
@@ -70,7 +71,8 @@
     "files": [
       "out/**/*",
       "package.json",
-      "LICENSE"
+      "LICENSE",
+      "THIRD_PARTY_NOTICES.md"
     ],
     "win": {
       "icon": "build/icon.png",

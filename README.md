@@ -23,6 +23,8 @@ then queue complete beatmap sets for osu!lazer's own reference-aware cleanup.
   `storage.ini` locations, with manual folder selection as a fallback.
 - A dashboard for set and difficulty counts, logical library size, game modes,
   ranked status, star ranges, BPM ranges, and recorded play timestamps.
+- Light, dark, and system appearance modes, with a restrained
+  Helvetica-first desktop interface.
 - A virtualized, sortable difficulty table designed to stay responsive with
   large libraries.
 - Text search, structured quick-search tokens, built-in views, and a nested

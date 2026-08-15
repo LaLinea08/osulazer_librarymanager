@@ -2,6 +2,7 @@ import { contextBridge, ipcRenderer } from "electron";
 import type {
   AppApi,
   AppSettings,
+  DeletionPolicy,
   FilterGroup,
   LibraryQuery,
   SerializableSelection,
@@ -43,8 +44,11 @@ const api: AppApi = {
     query: LibraryQuery,
     selection: SerializableSelection,
   ) => ipcRenderer.invoke(IPC.copySelectionMetadata, query, selection),
-  previewDeletion: (query: LibraryQuery, selection: SerializableSelection) =>
-    ipcRenderer.invoke(IPC.previewDeletion, query, selection),
+  previewDeletion: (
+    query: LibraryQuery,
+    selection: SerializableSelection,
+    policy?: DeletionPolicy,
+  ) => ipcRenderer.invoke(IPC.previewDeletion, query, selection, policy),
   executeDeletion: (previewId: string, confirmationPhrase: string) =>
     ipcRenderer.invoke(IPC.executeDeletion, previewId, confirmationPhrase),
   getQuarantineRecords: () => ipcRenderer.invoke(IPC.getQuarantineRecords),

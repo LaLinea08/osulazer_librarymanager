@@ -52,6 +52,7 @@ const REQUIRED_SCHEMA: Record<string, string[]> = {
   ],
   File: ["Hash"],
   RealmNamedFileUsage: ["File", "Filename"],
+  Score: ["BeatmapInfo", "BeatmapHash"],
 };
 
 const protectedWriteCapabilities: LibraryCapabilities = {
@@ -481,9 +482,12 @@ export async function scanRealmLibrary(
         const score = rawScore as unknown as DynamicObject;
         const linkedBeatmap = object(score.BeatmapInfo);
         const linkedId = linkedBeatmap ? realmIdentifier(linkedBeatmap.ID) : "";
-        const hash = string(score.BeatmapHash);
-        const key = linkedId || hash;
-        if (key) scoreCounts.set(key, (scoreCounts.get(key) ?? 0) + 1);
+        const hash = string(score.BeatmapHash).toLowerCase();
+        // Keep both identities. Some score rows have only one link populated,
+        // and mixed historical data can otherwise hide set-level evidence.
+        for (const key of new Set([linkedId, hash].filter(Boolean))) {
+          scoreCounts.set(key, (scoreCounts.get(key) ?? 0) + 1);
+        }
       }
 
       const draftRecords: Array<
@@ -497,6 +501,17 @@ export async function scanRealmLibrary(
         const set = sets[setIndex] as unknown as DynamicObject;
         if (set.DeletePending) continue;
         const setKey = realmIdentifier(set.ID, randomUUID());
+        const setBeatmaps = list(set.Beatmaps);
+        const setDifficultyCount = setBeatmaps.length;
+        const setHasRecordedPlay = setBeatmaps.some((beatmap) => {
+          const id = realmIdentifier(beatmap.ID);
+          const hash = string(beatmap.Hash).toLowerCase();
+          return (
+            (beatmap.LastPlayed !== null && beatmap.LastPlayed !== undefined) ||
+            (id ? (scoreCounts.get(id) ?? 0) > 0 : false) ||
+            (hash ? (scoreCounts.get(hash) ?? 0) > 0 : false)
+          );
+        });
         const resources = list(set.Files);
         const filenameToHash = new Map<string, string>();
         const resourceHashes = new Set<string>();
@@ -514,7 +529,7 @@ export async function scanRealmLibrary(
             containsVideo = true;
         }
 
-        for (const rawBeatmap of list(set.Beatmaps)) {
+        for (const rawBeatmap of setBeatmaps) {
           const beatmap = rawBeatmap;
           if (beatmap.Hidden) continue;
           const metadata = object(beatmap.Metadata);
@@ -537,6 +552,8 @@ export async function scanRealmLibrary(
             beatmapSetId: positiveOnlineId(set.OnlineID),
             beatmapSetLocalId: setKey,
             setProtected: Boolean(set.Protected),
+            setDifficultyCount,
+            setHasRecordedPlay,
             artist: string(metadata?.Artist, "Unknown artist"),
             title: string(metadata?.Title, "Unknown title"),
             difficultyName: string(
@@ -572,8 +589,10 @@ export async function scanRealmLibrary(
             importedAt: date(set.DateAdded),
             lastPlayedAt: date(beatmap.LastPlayed),
             localPlayCount: null,
-            localScoreCount:
-              scoreCounts.get(scoreKey) ?? scoreCounts.get(scoreHashKey) ?? 0,
+            localScoreCount: Math.max(
+              scoreCounts.get(scoreKey) ?? 0,
+              scoreCounts.get(scoreHashKey) ?? 0,
+            ),
             storageBytes: null,
             contentHash: hash,
             setKey,

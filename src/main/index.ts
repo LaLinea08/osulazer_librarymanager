@@ -11,6 +11,7 @@ import {
 } from "electron";
 import type {
   AppSettings,
+  DeletionPolicy,
   FilterGroup,
   LibraryCapabilities,
   LibraryQuery,
@@ -122,6 +123,17 @@ function assertSelection(
   ) {
     throw new Error("Invalid selection.");
   }
+}
+
+function normalizeDeletionPolicy(value: unknown): DeletionPolicy {
+  // Fail closed for old renderers and malformed/untrusted IPC payloads. The
+  // guard is disabled only when a caller deliberately sends boolean false.
+  return {
+    protectPlayedSets:
+      !value || typeof value !== "object"
+        ? true
+        : (value as Partial<DeletionPolicy>).protectPlayedSets !== false,
+  };
 }
 
 async function performScan(allowDuringMutation = false): Promise<void> {
@@ -262,13 +274,17 @@ function registerIpc(): void {
   );
   ipcMain.handle(
     IPC.previewDeletion,
-    async (_event, query: unknown, selection: unknown) => {
+    async (_event, query: unknown, selection: unknown, policy: unknown) => {
       if (activeScan || activeMutation) {
         throw new Error("Wait for the current library operation to finish.");
       }
       assertQuery(query);
       assertSelection(selection);
-      return requireDeletionManager().previewDeletion(query, selection);
+      return requireDeletionManager().previewDeletion(
+        query,
+        selection,
+        normalizeDeletionPolicy(policy),
+      );
     },
   );
   ipcMain.handle(

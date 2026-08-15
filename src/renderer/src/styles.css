@@ -4302,6 +4302,73 @@ body {
   width: min(840px, calc(100vw - 50px));
 }
 
+.played-set-protection {
+  display: grid;
+  align-items: center;
+  margin-bottom: 12px;
+  padding: 13px 14px;
+  border: 1px solid rgba(49, 113, 83, 0.23);
+  border-radius: 12px;
+  background: rgba(49, 113, 83, 0.055);
+  cursor: pointer;
+  gap: 12px;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  transition:
+    border-color 120ms ease,
+    background 120ms ease;
+}
+
+.played-set-protection.disabled {
+  border-color: rgba(179, 61, 72, 0.22);
+  background: rgba(179, 61, 72, 0.045);
+}
+
+.played-set-protection input {
+  width: 18px;
+  height: 18px;
+  margin: 0;
+  accent-color: var(--green);
+  cursor: pointer;
+}
+
+.played-set-protection input:focus-visible {
+  outline: 3px solid rgba(49, 91, 213, 0.15);
+  outline-offset: 3px;
+}
+
+.played-set-protection-copy {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.played-set-protection-copy strong {
+  color: var(--text);
+  font-size: 11px;
+}
+
+.played-set-protection-copy > span {
+  color: var(--text-2);
+  font-size: 10px;
+  line-height: 1.45;
+}
+
+.played-set-protection-state {
+  padding: 5px 8px;
+  border-radius: 99px;
+  background: rgba(49, 113, 83, 0.1);
+  color: var(--green);
+  font-size: 9px;
+  font-weight: 750;
+  white-space: nowrap;
+}
+
+.played-set-protection.disabled .played-set-protection-state {
+  background: rgba(179, 61, 72, 0.09);
+  color: var(--danger);
+}
+
 .delete-preview-loading {
   display: flex;
   min-height: 270px;
@@ -4329,6 +4396,8 @@ body {
 
 .deletion-error,
 .deletion-expansion,
+.played-protection-result,
+.played-protection-off,
 .deletion-blockers,
 .backup-estimate,
 .mutation-explanation,
@@ -4357,6 +4426,8 @@ body {
 
 .deletion-error strong,
 .deletion-expansion strong,
+.played-protection-result strong,
+.played-protection-off strong,
 .deletion-blockers strong,
 .backup-estimate strong,
 .mutation-explanation strong,
@@ -4403,6 +4474,8 @@ body {
 }
 
 .deletion-expansion span,
+.played-protection-result span,
+.played-protection-off span,
 .backup-estimate span,
 .restore-window-note span,
 .result-banner span {
@@ -4411,6 +4484,29 @@ body {
   color: var(--text-2);
   font-size: 10px;
   line-height: 1.45;
+}
+
+.played-protection-result,
+.played-protection-off {
+  margin-top: 12px;
+  padding: 12px 13px;
+}
+
+.played-protection-result {
+  border-color: rgba(49, 113, 83, 0.2);
+  background: rgba(49, 113, 83, 0.055);
+  color: var(--green);
+}
+
+.played-protection-off {
+  border-color: rgba(179, 61, 72, 0.22);
+  background: rgba(179, 61, 72, 0.055);
+  color: var(--danger);
+}
+
+.played-protection-result > div,
+.played-protection-off > div {
+  min-width: 0;
 }
 
 .deletion-blockers {
@@ -4540,6 +4636,18 @@ body {
   border-color: rgba(40, 124, 120, 0.2);
   background: rgba(40, 124, 120, 0.055);
   color: var(--cyan);
+}
+
+@media (max-width: 680px) {
+  .played-set-protection {
+    align-items: start;
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+
+  .played-set-protection-state {
+    width: fit-content;
+    grid-column: 2;
+  }
 }
 
 .recovery-section {

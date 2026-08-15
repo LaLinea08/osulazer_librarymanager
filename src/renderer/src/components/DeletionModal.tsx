@@ -68,6 +68,7 @@ export function ProtectedDeletionModal({
   const dialogRef = useRef<HTMLElement>(null);
   const [preview, setPreview] = useState<DeletionPreview | null>(null);
   const [result, setResult] = useState<DeletionResult | null>(null);
+  const [protectPlayedSets, setProtectPlayedSets] = useState(true);
   const [confirmation, setConfirmation] = useState("");
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState<"delete" | "restore" | null>(null);
@@ -78,7 +79,7 @@ export function ProtectedDeletionModal({
     if (!open) return;
     let cancelled = false;
     void window.libraryManager
-      .previewDeletion(query, selection)
+      .previewDeletion(query, selection, { protectPlayedSets })
       .then((nextPreview) => {
         if (!cancelled) setPreview(nextPreview);
       })
@@ -96,7 +97,7 @@ export function ProtectedDeletionModal({
     return () => {
       cancelled = true;
     };
-  }, [open, query, reloadToken, selection]);
+  }, [open, protectPlayedSets, query, reloadToken, selection]);
 
   useEffect(() => {
     const previouslyFocused =
@@ -171,6 +172,14 @@ export function ProtectedDeletionModal({
     if (!busy) onClose();
   };
 
+  const changePlayedSetProtection = (enabled: boolean): void => {
+    setProtectPlayedSets(enabled);
+    setPreview(null);
+    setConfirmation("");
+    setError(null);
+    setLoading(true);
+  };
+
   const handleDialogKeyDown = (
     event: React.KeyboardEvent<HTMLElement>,
   ): void => {
@@ -240,12 +249,41 @@ export function ProtectedDeletionModal({
         </header>
 
         <div className="modal-content">
+          {!result && (
+            <label
+              className={
+                "played-set-protection " +
+                (protectPlayedSets ? "enabled" : "disabled")
+              }
+            >
+              <input
+                checked={protectPlayedSets}
+                disabled={Boolean(busy)}
+                onChange={(event) =>
+                  changePlayedSetProtection(event.target.checked)
+                }
+                type="checkbox"
+              />
+              <span className="played-set-protection-copy">
+                <strong>Protect sets with any recorded play</strong>
+                <span>
+                  If any difficulty has a recorded play or local score, the
+                  entire beatmap set is excluded from this deletion.
+                </span>
+              </span>
+              <span className="played-set-protection-state">
+                {protectPlayedSets ? "Recommended · On" : "Off"}
+              </span>
+            </label>
+          )}
+
           {loading && (
             <div className="delete-preview-loading" role="status">
               <LoaderCircle className="spin" size={24} />
               <strong>Building an exact deletion plan</strong>
               <span>
-                Rechecking the fresh index, protected sets, and backup size.
+                Rechecking the fresh index, whole-set play protection, and
+                backup size.
               </span>
             </div>
           )}
@@ -371,7 +409,7 @@ export function ProtectedDeletionModal({
                   </strong>
                 </div>
                 <div>
-                  <span>Affected sets</span>
+                  <span>Sets after play guard</span>
                   <strong>{preview.affectedSets.toLocaleString()}</strong>
                 </div>
                 <div>
@@ -380,7 +418,43 @@ export function ProtectedDeletionModal({
                 </div>
               </div>
 
-              {preview.affectedDifficulties > preview.selectedDifficulties && (
+              {protectPlayedSets && (
+                <div className="played-protection-result" role="status">
+                  <ShieldCheck size={20} />
+                  <div>
+                    <strong>
+                      {preview.playedSetsSkipped.toLocaleString()} played set
+                      {preview.playedSetsSkipped === 1 ? "" : "s"} protected
+                    </strong>
+                    <span>
+                      {preview.playedDifficultiesSkipped.toLocaleString()}{" "}
+                      whole-set{" "}
+                      {preview.playedDifficultiesSkipped === 1
+                        ? "difficulty was"
+                        : "difficulties were"}{" "}
+                      excluded. Any recorded play or local score on any
+                      difficulty protects every difficulty in that set.
+                    </span>
+                  </div>
+                </div>
+              )}
+
+              {!protectPlayedSets && (
+                <div className="played-protection-off" role="alert">
+                  <AlertTriangle size={20} />
+                  <div>
+                    <strong>Whole-set play protection is off</strong>
+                    <span>
+                      A never-played selected difficulty can now bring a played
+                      sibling difficulty into the whole-set deletion.
+                    </span>
+                  </div>
+                </div>
+              )}
+
+              {preview.affectedDifficulties +
+                preview.playedDifficultiesSkipped >
+                preview.selectedDifficulties && (
                 <div className="deletion-expansion">
                   <AlertTriangle size={19} />
                   <div>
@@ -389,9 +463,11 @@ export function ProtectedDeletionModal({
                       osu!lazer deletes at set level. This adds{" "}
                       {(
                         preview.affectedDifficulties -
-                        preview.selectedDifficulties
+                        preview.selectedDifficulties +
+                        preview.playedDifficultiesSkipped
                       ).toLocaleString()}{" "}
-                      difficulties that share the selected sets.
+                      difficulties that share the selected sets. Played-set
+                      protection is applied after that expansion.
                     </span>
                   </div>
                 </div>

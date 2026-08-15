@@ -214,27 +214,35 @@ implementation therefore fails closed and performs the following sequence:
 1. Resolve selected difficulty IDs from the last successful index and expand
    them to an exact, deduplicated set-ID list. A subset of a set is never a valid
    deletion target.
-2. Require the configured data root, Realm schema 51, a closed osu! process, and
+2. Apply the default-on played-set policy across every difficulty in each local
+   set, not merely the selected or currently filtered difficulties. A set is
+   skipped when any difficulty has a `LastPlayed` timestamp, a linked or
+   hash-matching local `Score` row, or a positive play count from a compatible
+   adapter. Hidden difficulties participate in this check.
+3. Require the configured data root, Realm schema 51, a closed osu! process, and
    an indexed source fingerprint that exactly matches the live `client.realm`.
-3. Require the exact `DELETE 1 SET` or `DELETE N SETS` confirmation phrase.
-4. Create an app-owned operation directory and a preparing manifest.
-5. Copy the complete `client.realm` and verify its size and SHA-256 digest.
-6. Open only that backup read-only, resolve every selected set, and reject a
+4. Require the exact `DELETE 1 SET` or `DELETE N SETS` confirmation phrase for
+   the eligible sets remaining after the policy is applied.
+5. Create an app-owned operation directory and a preparing manifest.
+6. Copy the complete `client.realm` and verify its size and SHA-256 digest.
+7. Open only that backup read-only, resolve every selected set, and reject a
    missing, `Protected`, or already-pending set.
-7. Copy every unique blob referenced by those sets to the operation directory,
+8. Copy every unique blob referenced by those sets to the operation directory,
    preserving its content-addressed path, and verify each byte count and SHA-256
    digest. Blobs shared among selected sets are stored once.
-8. Build one standard ZIP-format `.olz` per set from its exact logical
+9. Build one standard ZIP-format `.olz` per set from its exact logical
    filenames. Reject unsafe paths, duplicate exact filenames, and archives with
    no top-level `.osu`; reopen each archive and verify every entry's size and
    hash.
-9. Recheck free space, osu! process state, the source fingerprint, exact target
-   count, protection/pending state, and every live filename/hash relationship.
-10. Open the live Realm with format upgrades disabled and execute one
+10. Recheck free space, osu! process state, the source fingerprint, exact target
+    count, whole-set play evidence, protection/pending state, and every live
+    filename/hash relationship. If any target gained recorded play evidence,
+    abort the whole operation before changing any flag.
+11. Open the live Realm with format upgrades disabled and execute one
     transaction that changes only each target set's `DeletePending` field to
     `true`. If the transaction throws, Realm rolls it back; the manager also
     verifies the flags after closing and reopening read-only.
-11. Keep the recovery package and refresh the app-owned index. The manager does
+12. Keep the recovery package and refresh the app-owned index. The manager does
     not delete, rename, or move any file in osu!'s `files/` tree.
 
 ### Recovery states
@@ -331,12 +339,24 @@ The difficulty status is preferred, with set status as a fallback.
   back to rows whose `BeatmapHash` matches the difficulty content hash. A score
   row is not the same thing as a play attempt, and scores may be detached from a
   current beatmap record after content changes.
+- The default-on played-set deletion policy is conservative. It protects the
+  complete local set when **any** difficulty has a non-null `LastPlayed`, a
+  positive `localScoreCount`, or a positive `localPlayCount` if a future
+  compatible adapter can populate that field. These signals are combined with
+  OR, because either a timestamp without a retained score or a retained score
+  without a timestamp is sufficient recorded evidence.
+- `localPlayCount` being `null` does not by itself classify a set as played or
+  unplayed; the current adapter intentionally cannot provide that counter. No
+  recorded evidence is not proof that a map was never played.
+- The policy is evaluated by local set GUID. Offline sets and distinct local
+  sets that happen to share an online set ID do not protect one another.
 
 ### Visibility and pending deletion
 
 - Sets with `DeletePending == true` are excluded, matching osu!lazer's usable-set
   query behavior.
-- Difficulties with `Hidden == true` are excluded from the current index.
+- Difficulties with `Hidden == true` are excluded from the browser index, but
+  their recorded play evidence is included in the whole-set deletion guard.
 - `BeatmapSet.Protected` is captured for guarded maintenance and is a hard
   deletion block. This is stricter than calling the generic object-level
   `Delete()` method directly and matches osu!'s guarded bulk-delete behavior.
@@ -372,6 +392,7 @@ The difficulty status is preferred, with set status as a fallback.
 | Read AR/OD/CS/HP, BPM, length, base stars         |    Yes    | Unknown and not-calculated values stay nullable                                                                                 |
 | Read set-added, ranked, and last-played dates     |    Yes    | Set-added is not per difficulty                                                                                                 |
 | Read local score presence/count                   |    Yes    | Score rows, not play attempts                                                                                                   |
+| Protect complete sets with recorded play evidence |  Guarded  | Default on; checks every difficulty using last-play timestamp, local Score rows, and any available positive play count          |
 | Read collections                                  |  Limited  | The model is readable; only collection count is indexed and membership editing is unavailable                                   |
 | Compute logical set storage                       |    Yes    | Deduplicated inside a set; not promised reclaimable bytes                                                                       |
 | Detect referenced missing blobs                   |    Yes    | Diagnostic only; missing target blobs block guarded deletion                                                                    |
@@ -411,6 +432,8 @@ Behavior by condition:
 | Guarded deletion on verified schema 51           | Continue only after all backup, process, fingerprint, protection, and graph checks pass                             |
 | Deletion source differs from indexed fingerprint | Block before backup/write and require a fresh scan                                                                  |
 | Deletion target is protected or already pending  | Block the entire operation; never queue a partial selection                                                         |
+| Played-set protection finds recorded evidence    | Skip that complete local set; never delete only its unplayed difficulties                                           |
+| A target gains play evidence after preview       | Abort before the transaction; never queue a partial selection                                                       |
 | osu! starts or live set graph changes mid-flow   | Block before the transaction; retain any completed app-owned recovery package                                       |
 | Undo target was finalized by osu!                | Do not partially recreate Realm records; retain verified `.olz` archives for manual import                          |
 

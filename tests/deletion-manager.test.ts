@@ -15,7 +15,11 @@ import type { BeatmapDifficulty } from "../src/shared/contracts";
 import { EMPTY_FILTER_GROUP } from "../src/shared/contracts";
 import { AppDatabase } from "../src/main/database";
 import { DeletionManager } from "../src/main/deletion-manager";
-import { hashPath, sha256File } from "../src/main/library-integration";
+import {
+  hashPath,
+  scanRealmLibrary,
+  sha256File,
+} from "../src/main/library-integration";
 
 const schema: Realm.ObjectSchema[] = [
   {
@@ -60,6 +64,17 @@ const schema: Realm.ObjectSchema[] = [
       Hidden: { type: "bool", default: false },
     },
   },
+  {
+    name: "Score",
+    properties: {
+      BeatmapInfo: "Beatmap?",
+      BeatmapHash: "string?",
+    },
+  },
+  {
+    name: "BeatmapCollection",
+    properties: { Name: "string?" },
+  },
 ];
 
 const workspaces: string[] = [];
@@ -82,6 +97,7 @@ function record(
   setId: string,
   storageBytes: number,
   contentHash: string,
+  overrides: Partial<BeatmapDifficulty> = {},
 ): BeatmapDifficulty {
   return {
     id,
@@ -89,6 +105,8 @@ function record(
     beatmapSetId: 42,
     beatmapSetLocalId: setId,
     setProtected: false,
+    setDifficultyCount: 2,
+    setHasRecordedPlay: false,
     artist: "Safety Artist",
     title: "Recovery Set",
     difficultyName,
@@ -114,6 +132,7 @@ function record(
     localScoreCount: 0,
     storageBytes,
     contentHash,
+    ...overrides,
   };
 }
 
@@ -248,6 +267,54 @@ async function setPending(
   }
 }
 
+async function addHiddenPlayedDifficulty(
+  realmPath: string,
+  setId: string,
+  evidence: "last-played" | "score" = "last-played",
+): Promise<void> {
+  const realm = await Realm.open({
+    path: realmPath,
+    schema,
+    schemaVersion: 51,
+  });
+  try {
+    const set = Array.from(realm.objects("BeatmapSet")).find(
+      (value) => String((value as unknown as { ID: unknown }).ID) === setId,
+    ) as unknown as
+      { Beatmaps: { push: (value: unknown) => void } } | undefined;
+    if (!set) throw new Error("Fixture set was not found.");
+    realm.write(() => {
+      const hidden = realm.create("Beatmap", {
+        ID: "hidden-played-difficulty",
+        DifficultyName: "Hidden played difficulty",
+        Ruleset: null,
+        Difficulty: null,
+        Metadata: null,
+        BeatmapSet: set,
+        OnlineID: null,
+        Length: 120_000,
+        BPM: 180,
+        Hash: "c".repeat(64),
+        StarRating: 6,
+        LastPlayed:
+          evidence === "last-played"
+            ? new Date("2026-08-01T12:00:00.000Z")
+            : null,
+        Hidden: true,
+      });
+      set.Beatmaps.push(hidden);
+      if (evidence === "score") {
+        realm.create("Score", {
+          BeatmapInfo: hidden,
+          BeatmapHash: "c".repeat(64),
+        });
+      }
+    });
+  } finally {
+    realm.close();
+  }
+}
+
 function previewSingleSet(manager: DeletionManager) {
   return manager.previewDeletion(
     {
@@ -262,6 +329,140 @@ function previewSingleSet(manager: DeletionManager) {
 }
 
 describe("DeletionManager", () => {
+  it("propagates hidden sibling play evidence and full counts during scan", async () => {
+    const fixture = await createFixture();
+    await addHiddenPlayedDifficulty(
+      join(fixture.root, "client.realm"),
+      fixture.setId,
+      "score",
+    );
+
+    const scan = await scanRealmLibrary(
+      fixture.root,
+      join(fixture.root, "snapshots"),
+      new AbortController().signal,
+      () => undefined,
+    );
+
+    expect(scan.records).toHaveLength(2);
+    expect(scan.records).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          setDifficultyCount: 3,
+          setHasRecordedPlay: true,
+        }),
+      ]),
+    );
+    fixture.database.close();
+  });
+
+  it("rechecks hidden play evidence in live Realm immediately before writing", async () => {
+    const fixture = await createFixture();
+    const realmPath = join(fixture.root, "client.realm");
+    await addHiddenPlayedDifficulty(realmPath, fixture.setId);
+    const storageBytes = (
+      await Promise.all(fixture.blobPaths.map((path) => stat(path)))
+    ).reduce((total, value) => total + value.size, 0);
+    const fingerprint = await sha256File(realmPath);
+    fixture.database.replaceBeatmaps(
+      [
+        record(
+          "difficulty-1",
+          "Normal",
+          fixture.setId,
+          storageBytes,
+          "a".repeat(64),
+          { setDifficultyCount: 3 },
+        ),
+        record(
+          "difficulty-2",
+          "Hard",
+          fixture.setId,
+          storageBytes,
+          "b".repeat(64),
+          { setDifficultyCount: 3 },
+        ),
+      ],
+      fixture.root,
+      fingerprint,
+    );
+
+    const preview = await previewSingleSet(fixture.manager);
+    expect(preview.canExecute).toBe(true);
+    await expect(
+      fixture.manager.executeDeletion(
+        preview.previewId,
+        preview.confirmationPhrase,
+      ),
+    ).rejects.toThrow("now has a recorded play or score");
+    expect(await pending(realmPath, fixture.setId)).toBe(false);
+    fixture.database.close();
+  }, 30_000);
+
+  it("defaults to skipping a complete set when a sibling has a recorded score", async () => {
+    const fixture = await createFixture();
+    const realmPath = join(fixture.root, "client.realm");
+    const storageBytes = (
+      await Promise.all(fixture.blobPaths.map((path) => stat(path)))
+    ).reduce((total, value) => total + value.size, 0);
+    const fingerprint = await sha256File(realmPath);
+    fixture.database.replaceBeatmaps(
+      [
+        record(
+          "difficulty-1",
+          "Normal",
+          fixture.setId,
+          storageBytes,
+          "a".repeat(64),
+        ),
+        record(
+          "difficulty-2",
+          "Hard",
+          fixture.setId,
+          storageBytes,
+          "b".repeat(64),
+          { localScoreCount: 1 },
+        ),
+      ],
+      fixture.root,
+      fingerprint,
+    );
+
+    const protectedPreview = await previewSingleSet(fixture.manager);
+    expect(protectedPreview).toMatchObject({
+      selectedDifficulties: 1,
+      affectedSets: 0,
+      affectedDifficulties: 0,
+      playedSetsSkipped: 1,
+      playedDifficultiesSkipped: 2,
+      canExecute: false,
+    });
+    expect(protectedPreview.blockers.join(" ")).toContain(
+      "recorded play or score",
+    );
+    expect(await pending(realmPath, fixture.setId)).toBe(false);
+
+    const optedOutPreview = await fixture.manager.previewDeletion(
+      {
+        text: "",
+        filters: EMPTY_FILTER_GROUP,
+        sort: { field: "artist", direction: "asc" },
+        offset: 0,
+        limit: 200,
+      },
+      { mode: "explicit", included: ["difficulty-1"], excluded: [] },
+      { protectPlayedSets: false },
+    );
+    expect(optedOutPreview).toMatchObject({
+      affectedSets: 1,
+      affectedDifficulties: 2,
+      playedSetsSkipped: 0,
+      playedDifficultiesSkipped: 0,
+      canExecute: true,
+    });
+    fixture.database.close();
+  });
+
   it("backs up full sets and only toggles DeletePending, with undo", async () => {
     const fixture = await createFixture();
     const realmPath = join(fixture.root, "client.realm");

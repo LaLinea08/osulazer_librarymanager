@@ -24,6 +24,8 @@ function beatmap(
     beatmapSetId: null,
     beatmapSetLocalId,
     setProtected: false,
+    setDifficultyCount: 1,
+    setHasRecordedPlay: false,
     artist: `Artist ${beatmapSetLocalId}`,
     title: `Title ${beatmapSetLocalId}`,
     difficultyName: id,
@@ -84,8 +86,16 @@ describe("AppDatabase guarded deletion support", () => {
   it("expands one selected difficulty to its complete local set", () => {
     database.replaceBeatmaps(
       [
-        beatmap("a-1", "set-a", { beatmapSetId: 50, storageBytes: 4_000 }),
-        beatmap("a-2", "set-a", { beatmapSetId: 50, storageBytes: 4_000 }),
+        beatmap("a-1", "set-a", {
+          beatmapSetId: 50,
+          storageBytes: 4_000,
+          setDifficultyCount: 2,
+        }),
+        beatmap("a-2", "set-a", {
+          beatmapSetId: 50,
+          storageBytes: 4_000,
+          setDifficultyCount: 2,
+        }),
         beatmap("b-1", "set-b", { beatmapSetId: 50, storageBytes: 8_000 }),
       ],
       "C:\\osu",
@@ -104,6 +114,8 @@ describe("AppDatabase guarded deletion support", () => {
       affectedSets: 1,
       logicalBytes: 4_000,
       protectedSets: 0,
+      playedSetsSkipped: 0,
+      playedDifficultiesSkipped: 0,
       blockers: [],
     });
     expect(resolution.selectedDifficultyIds).toEqual(["a-1"]);
@@ -124,7 +136,10 @@ describe("AppDatabase guarded deletion support", () => {
       DROP INDEX beatmaps_local_set_idx;
       ALTER TABLE beatmaps DROP COLUMN beatmap_set_local_id;
       ALTER TABLE beatmaps DROP COLUMN set_protected;
+      ALTER TABLE beatmaps DROP COLUMN set_difficulty_count;
+      ALTER TABLE beatmaps DROP COLUMN set_has_recorded_play;
       DELETE FROM schema_migrations WHERE version = 2;
+      DELETE FROM schema_migrations WHERE version = 3;
     `);
     legacy.close();
 
@@ -145,14 +160,46 @@ describe("AppDatabase guarded deletion support", () => {
     });
   });
 
+  it("requires a fresh scan after migrating an index without set-wide evidence", () => {
+    database.replaceBeatmaps(
+      [beatmap("legacy-1", "legacy-set")],
+      "C:\\osu",
+      "sha256:legacy",
+    );
+    database.close();
+    const path = join(directory, "index.sqlite");
+    const legacy = new DatabaseSync(path);
+    legacy.exec(`
+      ALTER TABLE beatmaps DROP COLUMN set_difficulty_count;
+      ALTER TABLE beatmaps DROP COLUMN set_has_recorded_play;
+      DELETE FROM schema_migrations WHERE version = 3;
+    `);
+    legacy.close();
+
+    database = new AppDatabase(path);
+    const resolution = database.resolveDeletionSelection(
+      query,
+      explicit("legacy-1"),
+    );
+
+    expect(resolution.blockers.join(" ")).toContain("play-history evidence");
+    expect(resolution.affectedSets).toBe(1);
+  });
+
   it("uses local set identity for offline sets and duplicate online IDs", () => {
     database.replaceBeatmaps(
       [
-        beatmap("a-1", "set-a", { beatmapSetId: 50 }),
-        beatmap("a-2", "set-a", { beatmapSetId: 50 }),
+        beatmap("a-1", "set-a", {
+          beatmapSetId: 50,
+          setDifficultyCount: 2,
+        }),
+        beatmap("a-2", "set-a", {
+          beatmapSetId: 50,
+          setDifficultyCount: 2,
+        }),
         beatmap("b-1", "set-b", { beatmapSetId: 50 }),
-        beatmap("c-1", "set-c"),
-        beatmap("c-2", "set-c"),
+        beatmap("c-1", "set-c", { setDifficultyCount: 2 }),
+        beatmap("c-2", "set-c", { setDifficultyCount: 2 }),
         beatmap("d-1", "set-d"),
       ],
       "C:\\osu",
@@ -169,8 +216,8 @@ describe("AppDatabase guarded deletion support", () => {
   it("honors all-filtered exclusions before expanding selected sets", () => {
     database.replaceBeatmaps(
       [
-        beatmap("a-1", "set-a"),
-        beatmap("a-2", "set-a"),
+        beatmap("a-1", "set-a", { setDifficultyCount: 2 }),
+        beatmap("a-2", "set-a", { setDifficultyCount: 2 }),
         beatmap("b-1", "set-b"),
         beatmap("c-1", "set-c", { mode: "mania" }),
         beatmap("d-1", "set-d"),
@@ -207,6 +254,192 @@ describe("AppDatabase guarded deletion support", () => {
       "set-a",
       "set-d",
     ]);
+  });
+
+  it("protects a played sibling outside an all-filtered no-play selection", () => {
+    database.replaceBeatmaps(
+      [
+        beatmap("low-stars", "played-set", {
+          setDifficultyCount: 2,
+          setHasRecordedPlay: true,
+        }),
+        beatmap("high-stars", "played-set", {
+          lastPlayedAt: "2026-08-01T12:00:00.000Z",
+          setDifficultyCount: 2,
+          setHasRecordedPlay: true,
+        }),
+        beatmap("safe-low-stars", "safe-set"),
+      ],
+      "C:\\osu",
+      "sha256:indexed",
+    );
+    const noPlayQuery: LibraryQuery = {
+      ...query,
+      filters: {
+        ...EMPTY_FILTER_GROUP,
+        children: [
+          {
+            kind: "condition",
+            id: "no-play-timestamp",
+            field: "lastPlayedAt",
+            operator: "isEmpty",
+            enabled: true,
+          },
+        ],
+      },
+    };
+
+    const resolution = database.resolveDeletionSelection(noPlayQuery, {
+      mode: "all-filtered",
+      included: [],
+      excluded: [],
+    });
+
+    expect(resolution).toMatchObject({
+      selectedDifficulties: 2,
+      affectedSets: 1,
+      affectedDifficulties: 1,
+      playedSetsSkipped: 1,
+      playedDifficultiesSkipped: 2,
+      blockers: [],
+    });
+    expect(resolution.sets.map((set) => set.beatmapSetLocalId)).toEqual([
+      "safe-set",
+    ]);
+  });
+
+  it("skips the whole set when an unselected sibling has recorded play evidence", () => {
+    database.replaceBeatmaps(
+      [
+        beatmap("low-stars", "played-set", {
+          setDifficultyCount: 2,
+          setHasRecordedPlay: true,
+        }),
+        beatmap("high-stars", "played-set", {
+          lastPlayedAt: "2026-08-01T12:00:00.000Z",
+          setDifficultyCount: 2,
+          setHasRecordedPlay: true,
+        }),
+        beatmap("safe-1", "safe-set", { setDifficultyCount: 2 }),
+        beatmap("safe-2", "safe-set", { setDifficultyCount: 2 }),
+      ],
+      "C:\\osu",
+      "sha256:indexed",
+    );
+
+    const resolution = database.resolveDeletionSelection(
+      query,
+      explicit("low-stars", "safe-1"),
+    );
+
+    expect(resolution).toMatchObject({
+      selectedDifficulties: 2,
+      affectedSets: 1,
+      affectedDifficulties: 2,
+      playedSetsSkipped: 1,
+      // Both the unplayed lower difficulty and its played sibling are omitted.
+      playedDifficultiesSkipped: 2,
+      blockers: [],
+    });
+    expect(resolution.sets.map((set) => set.beatmapSetLocalId)).toEqual([
+      "safe-set",
+    ]);
+  });
+
+  it("uses scan-derived hidden difficulty counts and play evidence", () => {
+    database.replaceBeatmaps(
+      [
+        beatmap("only-visible-difficulty", "set-with-hidden-play", {
+          setDifficultyCount: 3,
+          setHasRecordedPlay: true,
+        }),
+      ],
+      "C:\\osu",
+      "sha256:indexed",
+    );
+
+    const resolution = database.resolveDeletionSelection(
+      query,
+      explicit("only-visible-difficulty"),
+    );
+
+    expect(resolution).toMatchObject({
+      selectedDifficulties: 1,
+      affectedSets: 0,
+      affectedDifficulties: 0,
+      playedSetsSkipped: 1,
+      playedDifficultiesSkipped: 3,
+    });
+  });
+
+  it.each([
+    { localPlayCount: 1 },
+    { localScoreCount: 1 },
+    { lastPlayedAt: "2026-08-01T12:00:00.000Z" },
+  ] satisfies Array<Partial<BeatmapDifficulty>>)(
+    "treats every supported recorded-play signal as set-level protection: %o",
+    (playedEvidence) => {
+      database.replaceBeatmaps(
+        [
+          beatmap("selected", "set-a", {
+            setDifficultyCount: 2,
+            setHasRecordedPlay: true,
+          }),
+          beatmap("played-sibling", "set-a", {
+            ...playedEvidence,
+            setDifficultyCount: 2,
+            setHasRecordedPlay: true,
+          }),
+        ],
+        "C:\\osu",
+        "sha256:indexed",
+      );
+
+      const resolution = database.resolveDeletionSelection(
+        query,
+        explicit("selected"),
+      );
+
+      expect(resolution).toMatchObject({
+        affectedSets: 0,
+        affectedDifficulties: 0,
+        playedSetsSkipped: 1,
+        playedDifficultiesSkipped: 2,
+      });
+      expect(resolution.blockers.join(" ")).toContain("recorded play or score");
+    },
+  );
+
+  it("allows an explicit opt-out while retaining whole-set expansion", () => {
+    database.replaceBeatmaps(
+      [
+        beatmap("low-stars", "set-a", {
+          setDifficultyCount: 2,
+          setHasRecordedPlay: true,
+        }),
+        beatmap("high-stars", "set-a", {
+          localScoreCount: 1,
+          setDifficultyCount: 2,
+          setHasRecordedPlay: true,
+        }),
+      ],
+      "C:\\osu",
+      "sha256:indexed",
+    );
+
+    const resolution = database.resolveDeletionSelection(
+      query,
+      explicit("low-stars"),
+      { protectPlayedSets: false },
+    );
+
+    expect(resolution).toMatchObject({
+      affectedSets: 1,
+      affectedDifficulties: 2,
+      playedSetsSkipped: 0,
+      playedDifficultiesSkipped: 0,
+      blockers: [],
+    });
   });
 
   it("blocks protected sets and indexes without a source fingerprint", () => {

@@ -16,6 +16,10 @@ export interface BeatmapDifficulty {
   beatmapSetId: number | null;
   beatmapSetLocalId: string;
   setProtected: boolean;
+  /** Includes hidden difficulties because deletion always operates on a set. */
+  setDifficultyCount: number;
+  /** True when any difficulty in the set has recorded play/score evidence. */
+  setHasRecordedPlay: boolean;
   artist: string;
   title: string;
   difficultyName: string;
@@ -231,6 +235,18 @@ export interface SerializableSelection {
   excluded: string[];
 }
 
+export interface DeletionPolicy {
+  /**
+   * Skip a complete beatmap set when any of its difficulties has recorded
+   * play or score evidence. Missing or malformed IPC input is treated as true.
+   */
+  protectPlayedSets: boolean;
+}
+
+export const DEFAULT_DELETION_POLICY: DeletionPolicy = {
+  protectPlayedSets: true,
+};
+
 export interface DeletionPreviewExample {
   beatmapSetId: number | null;
   artist: string;
@@ -251,6 +267,9 @@ export interface DeletionPreview {
   logicalBytes: number;
   uniqueBackupBytes: number;
   protectedSets: number;
+  playedSetsSkipped: number;
+  /** All difficulties in skipped sets, including unplayed siblings. */
+  playedDifficultiesSkipped: number;
   examples: DeletionPreviewExample[];
   blockers: string[];
   confirmationPhrase: string;
@@ -360,6 +379,7 @@ export interface AppApi {
   previewDeletion: (
     query: LibraryQuery,
     selection: SerializableSelection,
+    policy?: DeletionPolicy,
   ) => Promise<DeletionPreview>;
   executeDeletion: (
     previewId: string,

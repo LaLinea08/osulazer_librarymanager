@@ -1,0 +1,40 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512" fill="none">
+  <defs>
+    <linearGradient id="background" x1="56" y1="28" x2="456" y2="484" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#1B1E2A"/>
+      <stop offset="0.58" stop-color="#10121A"/>
+      <stop offset="1" stop-color="#090A0F"/>
+    </linearGradient>
+    <linearGradient id="ring" x1="112" y1="96" x2="408" y2="420" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#FF85BC"/>
+      <stop offset="0.55" stop-color="#FF5F9F"/>
+      <stop offset="1" stop-color="#AD5CFF"/>
+    </linearGradient>
+    <linearGradient id="sweep" x1="157" y1="343" x2="369" y2="169" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#FF5F9F" stop-opacity="0"/>
+      <stop offset="1" stop-color="#FF9BC7" stop-opacity="0.46"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="0" cy="0" r="1" gradientTransform="translate(365 157) rotate(127) scale(281)">
+      <stop stop-color="#FF5F9F" stop-opacity="0.22"/>
+      <stop offset="1" stop-color="#FF5F9F" stop-opacity="0"/>
+    </radialGradient>
+    <filter id="ringShadow" x="72" y="72" width="368" height="368" filterUnits="userSpaceOnUse">
+      <feGaussianBlur stdDeviation="12"/>
+    </filter>
+    <filter id="dotGlow" x="345" y="330" width="93" height="93" filterUnits="userSpaceOnUse">
+      <feGaussianBlur stdDeviation="12"/>
+    </filter>
+  </defs>
+  <rect x="16" y="16" width="480" height="480" rx="112" fill="url(#background)"/>
+  <rect x="17.5" y="17.5" width="477" height="477" rx="110.5" stroke="#FFFFFF" stroke-opacity="0.08" stroke-width="3"/>
+  <rect x="16" y="16" width="480" height="480" rx="112" fill="url(#glow)"/>
+  <circle cx="256" cy="256" r="155" stroke="#FF5F9F" stroke-opacity="0.26" stroke-width="20" filter="url(#ringShadow)"/>
+  <circle cx="256" cy="256" r="145" stroke="url(#ring)" stroke-width="24"/>
+  <circle cx="256" cy="256" r="112" stroke="#FFFFFF" stroke-opacity="0.055" stroke-width="2"/>
+  <path d="M151 343L361 169L289 288L151 343Z" fill="url(#sweep)"/>
+  <path d="M159 340L355 177" stroke="url(#ring)" stroke-width="22" stroke-linecap="round"/>
+  <path d="M176 356L372 193" stroke="#FFFFFF" stroke-opacity="0.14" stroke-width="4" stroke-linecap="round"/>
+  <circle cx="389" cy="369" r="29" fill="#FFFFFF" fill-opacity="0.28" filter="url(#dotGlow)"/>
+  <circle cx="389" cy="369" r="19" fill="#FFFFFF"/>
+  <circle cx="389" cy="369" r="8" fill="#FFE4F0"/>
+</svg>

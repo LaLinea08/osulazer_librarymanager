@@ -1,0 +1,105 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    name: Validate and build Windows x64
+    runs-on: windows-2025
+    timeout-minutes: 45
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24.19.0
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Check formatting
+        run: npm run format:check
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Test
+        run: npm test
+
+      - name: Stamp development build identity
+        id: version
+        shell: pwsh
+        run: |
+          $baseVersion = node -p "require('./package.json').version"
+          if ($baseVersion -notmatch '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$') {
+            throw "package.json version '$baseVersion' is not a stable semantic version."
+          }
+
+          $shortSha = $env:GITHUB_SHA.Substring(0, 8)
+          $version = "$baseVersion-dev.$env:GITHUB_RUN_NUMBER+$shortSha"
+
+          npm pkg set "version=$version"
+          if ($LASTEXITCODE -ne 0) {
+            exit $LASTEXITCODE
+          }
+
+          "APP_VERSION=$version" >> $env:GITHUB_ENV
+          "version=$version" >> $env:GITHUB_OUTPUT
+          Write-Output "Build version: $version"
+
+      - name: Build application
+        if: github.event_name == 'pull_request'
+        run: npm run build
+
+      - name: Build Windows portable executable and ZIP
+        if: github.event_name == 'push'
+        run: npm run dist:win
+
+      - name: Verify Windows artifacts
+        if: github.event_name == 'push'
+        shell: pwsh
+        run: |
+          $portable = @(Get-ChildItem -Path dist -Filter '*-windows-x64-portable.exe' -File)
+          $archive = @(Get-ChildItem -Path dist -Filter '*-windows-x64.zip' -File)
+
+          if ($portable.Count -ne 1) {
+            throw "Expected exactly one portable EXE in dist, found $($portable.Count)."
+          }
+          if ($archive.Count -ne 1) {
+            throw "Expected exactly one Windows ZIP in dist, found $($archive.Count)."
+          }
+
+          Write-Output "Portable EXE: $($portable[0].Name)"
+          Write-Output "Portable ZIP: $($archive[0].Name)"
+
+      - name: Upload Windows x64 development build
+        if: github.event_name == 'push'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: osu-lazer-library-manager-windows-x64
+          path: |
+            dist/*-windows-x64-portable.exe
+            dist/*-windows-x64.zip
+          if-no-files-found: error
+          retention-days: 14
+          compression-level: 0

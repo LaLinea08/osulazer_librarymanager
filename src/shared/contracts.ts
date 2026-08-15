@@ -1,0 +1,275 @@
+export type GameMode = "osu" | "taiko" | "catch" | "mania" | "unknown";
+
+export type BeatmapStatus =
+  | "ranked"
+  | "approved"
+  | "qualified"
+  | "loved"
+  | "pending"
+  | "wip"
+  | "graveyard"
+  | "unknown";
+
+export interface BeatmapDifficulty {
+  id: string;
+  beatmapId: number | null;
+  beatmapSetId: number | null;
+  artist: string;
+  title: string;
+  difficultyName: string;
+  mapper: string;
+  mode: GameMode;
+  status: BeatmapStatus;
+  bpm: number | null;
+  durationSeconds: number | null;
+  starRating: number | null;
+  approachRate: number | null;
+  overallDifficulty: number | null;
+  circleSize: number | null;
+  hpDrain: number | null;
+  source: string;
+  tags: string;
+  audioFilename: string | null;
+  hasBackground: boolean | null;
+  hasVideo: boolean | null;
+  rankedAt: string | null;
+  importedAt: string | null;
+  lastPlayedAt: string | null;
+  localPlayCount: number | null;
+  localScoreCount: number | null;
+  storageBytes: number | null;
+  contentHash: string;
+}
+
+export interface LibraryCandidate {
+  path: string;
+  displayPath: string;
+  source: "automatic" | "manual";
+  hasRealmDatabase: boolean;
+  hasFileStore: boolean;
+  confidence: "high" | "medium" | "low";
+}
+
+export interface LibraryCapabilities {
+  adapter: string;
+  readMetadata: boolean;
+  readCollections: boolean;
+  readPlayHistory: boolean;
+  accurateStorage: boolean;
+  writeLibrary: boolean;
+  limitations: string[];
+}
+
+export interface LibraryStatus {
+  configuredPath: string | null;
+  detectedCandidates: LibraryCandidate[];
+  capabilities: LibraryCapabilities;
+  osuIsRunning: boolean;
+  lastScanAt: string | null;
+  indexedDifficulties: number;
+  scanInProgress: boolean;
+}
+
+export interface ScanProgress {
+  phase: "discovering" | "parsing" | "indexing" | "complete" | "failed";
+  processed: number;
+  discovered: number;
+  imported: number;
+  skipped: number;
+  message: string;
+}
+
+export type FilterField =
+  | "artist"
+  | "title"
+  | "difficultyName"
+  | "mapper"
+  | "mode"
+  | "status"
+  | "bpm"
+  | "durationSeconds"
+  | "starRating"
+  | "approachRate"
+  | "overallDifficulty"
+  | "circleSize"
+  | "hpDrain"
+  | "source"
+  | "tags"
+  | "beatmapId"
+  | "beatmapSetId"
+  | "importedAt"
+  | "lastPlayedAt"
+  | "localPlayCount"
+  | "localScoreCount"
+  | "storageBytes"
+  | "hasVideo"
+  | "hasBackground";
+
+export type FilterOperator =
+  | "contains"
+  | "notContains"
+  | "equals"
+  | "notEquals"
+  | "beginsWith"
+  | "endsWith"
+  | "greaterThan"
+  | "greaterThanOrEqual"
+  | "lessThan"
+  | "lessThanOrEqual"
+  | "between"
+  | "in"
+  | "isTrue"
+  | "isFalse"
+  | "isEmpty"
+  | "isNotEmpty"
+  | "beforeRelativeDays"
+  | "afterRelativeDays";
+
+export interface FilterCondition {
+  kind: "condition";
+  id: string;
+  field: FilterField;
+  operator: FilterOperator;
+  value?: string | number | boolean | string[] | number[];
+  valueTo?: string | number;
+  label?: string;
+  enabled: boolean;
+}
+
+export interface FilterGroup {
+  kind: "group";
+  id: string;
+  conjunction: "and" | "or";
+  negated: boolean;
+  enabled: boolean;
+  children: FilterNode[];
+}
+
+export type FilterNode = FilterCondition | FilterGroup;
+
+export type SortField =
+  | "artist"
+  | "title"
+  | "difficultyName"
+  | "mapper"
+  | "mode"
+  | "starRating"
+  | "bpm"
+  | "durationSeconds"
+  | "status"
+  | "importedAt"
+  | "lastPlayedAt"
+  | "localPlayCount"
+  | "storageBytes";
+
+export interface LibraryQuery {
+  text: string;
+  filters: FilterGroup;
+  sort: { field: SortField; direction: "asc" | "desc" };
+  offset: number;
+  limit: number;
+}
+
+export interface LibraryQueryResult {
+  items: BeatmapDifficulty[];
+  totalDifficulties: number;
+  filteredDifficulties: number;
+  filteredSets: number;
+  filteredBytes: number;
+}
+
+export interface LibraryStatistics {
+  totalDifficulties: number;
+  totalSets: number;
+  knownStorageBytes: number;
+  neverPlayed: number | null;
+  byMode: Array<{ key: GameMode; count: number }>;
+  byStatus: Array<{ key: BeatmapStatus; count: number }>;
+  byStarRange: Array<{ key: string; count: number }>;
+  byBpmRange: Array<{ key: string; count: number }>;
+}
+
+export interface SavedSearch {
+  id: string;
+  name: string;
+  query: Omit<LibraryQuery, "offset" | "limit">;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface OperationRecord {
+  id: string;
+  timestamp: string;
+  type: "scan" | "export" | "collection" | "delete" | "restore";
+  summary: string;
+  affectedDifficulties: number;
+  affectedSets: number;
+  status: "success" | "partial" | "failed" | "blocked";
+  details: string | null;
+}
+
+export interface AppSettings {
+  libraryPath: string | null;
+  theme: "dark" | "light" | "system";
+  density: "compact" | "comfortable";
+  scanOnStartup: boolean;
+  readOnlyMode: true;
+}
+
+export interface AppBuildInfo {
+  version: string;
+  commit: string;
+  channel: "development" | "release";
+  builtAt: string;
+}
+
+export interface SerializableSelection {
+  mode: "explicit" | "all-filtered";
+  included: string[];
+  excluded: string[];
+}
+
+export interface AppApi {
+  getBuildInfo: () => Promise<AppBuildInfo>;
+  getLibraryStatus: () => Promise<LibraryStatus>;
+  chooseLibrary: () => Promise<LibraryCandidate | null>;
+  setLibraryPath: (path: string) => Promise<LibraryStatus>;
+  startScan: () => Promise<void>;
+  cancelScan: () => Promise<void>;
+  onScanProgress: (listener: (progress: ScanProgress) => void) => () => void;
+  queryLibrary: (query: LibraryQuery) => Promise<LibraryQueryResult>;
+  queryLibraryIds: (query: LibraryQuery) => Promise<string[]>;
+  getStatistics: (filters: FilterGroup) => Promise<LibraryStatistics>;
+  getSettings: () => Promise<AppSettings>;
+  updateSettings: (settings: Partial<AppSettings>) => Promise<AppSettings>;
+  getSavedSearches: () => Promise<SavedSearch[]>;
+  saveSearch: (
+    name: string,
+    query: Omit<LibraryQuery, "offset" | "limit">,
+  ) => Promise<SavedSearch>;
+  deleteSavedSearch: (id: string) => Promise<void>;
+  getOperationHistory: () => Promise<OperationRecord[]>;
+  copySelectionMetadata: (
+    query: LibraryQuery,
+    selection: SerializableSelection,
+  ) => Promise<number>;
+  copyText: (text: string) => Promise<void>;
+  openExternal: (url: string) => Promise<void>;
+}
+
+export const EMPTY_FILTER_GROUP: FilterGroup = {
+  kind: "group",
+  id: "root",
+  conjunction: "and",
+  negated: false,
+  enabled: true,
+  children: [],
+};
+
+export const DEFAULT_QUERY: LibraryQuery = {
+  text: "",
+  filters: EMPTY_FILTER_GROUP,
+  sort: { field: "artist", direction: "asc" },
+  offset: 0,
+  limit: 200,
+};

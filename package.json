@@ -1,0 +1,94 @@
+{
+  "name": "osulazer-library-manager",
+  "productName": "osu!lazer Library Manager",
+  "version": "0.1.0",
+  "description": "A fast, safety-first desktop browser for large osu!lazer beatmap libraries.",
+  "private": true,
+  "type": "module",
+  "main": "out/main/index.js",
+  "author": "LaLinea08",
+  "license": "MIT",
+  "scripts": {
+    "predev": "node scripts/generate-build-info.mjs",
+    "dev": "electron-vite dev",
+    "prebuild": "node scripts/generate-build-info.mjs",
+    "build": "npm run typecheck && electron-vite build",
+    "typecheck": "tsc -p tsconfig.node.json --noEmit && tsc -p tsconfig.web.json --noEmit",
+    "lint": "eslint . --max-warnings 0",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "generate:icon": "node scripts/generate-icon.cjs",
+    "package": "npm run build && electron-builder --dir",
+    "dist:win": "npm run build && electron-builder --win --x64 --publish never",
+    "smoke:packaged": "node scripts/smoke-packaged.mjs"
+  },
+  "dependencies": {
+    "@tanstack/react-virtual": "3.14.9",
+    "lucide-react": "1.31.0",
+    "realm": "20.2.0",
+    "react": "19.2.8",
+    "react-dom": "19.2.8"
+  },
+  "devDependencies": {
+    "@eslint/js": "10.0.1",
+    "@testing-library/react": "16.3.2",
+    "@types/node": "24.13.3",
+    "@types/react": "19.2.18",
+    "@types/react-dom": "19.2.4",
+    "@vitejs/plugin-react": "5.2.0",
+    "electron": "43.4.0",
+    "electron-builder": "26.15.3",
+    "electron-vite": "5.0.0",
+    "eslint": "10.8.1",
+    "eslint-plugin-react-hooks": "7.1.1",
+    "eslint-plugin-react-refresh": "0.5.4",
+    "jsdom": "30.0.1",
+    "playwright": "1.62.1",
+    "prettier": "3.9.6",
+    "typescript": "5.9.3",
+    "typescript-eslint": "8.67.0",
+    "vite": "7.3.6",
+    "vitest": "4.1.10"
+  },
+  "build": {
+    "appId": "dev.lalinea08.osulazerlibrarymanager",
+    "productName": "osu!lazer Library Manager",
+    "asar": true,
+    "asarUnpack": [
+      "**/*.node"
+    ],
+    "npmRebuild": false,
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "out/**/*",
+      "package.json",
+      "LICENSE"
+    ],
+    "win": {
+      "icon": "build/icon.png",
+      "executableName": "osu-lazer-library-manager",
+      "target": [
+        {
+          "target": "portable",
+          "arch": [
+            "x64"
+          ]
+        },
+        {
+          "target": "zip",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "artifactName": "osu-lazer-library-manager-${version}-windows-${arch}.${ext}"
+    },
+    "portable": {
+      "artifactName": "osu-lazer-library-manager-${version}-windows-${arch}-portable.${ext}"
+    }
+  }
+}

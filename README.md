@@ -13,7 +13,9 @@ then queue complete beatmap sets for osu!lazer's own reference-aware cleanup.
 > osu! API. It is limited to verified Realm schema 51 libraries, requires osu!
 > to be closed, refuses protected sets, and creates a verified recovery package
 > before changing only `BeatmapSet.DeletePending` in one transaction. The
-> manager never directly deletes or moves osu!'s content-addressed blobs.
+> default-on played-set guard also skips a complete set when any of its
+> difficulties has recorded play evidence. The manager never directly deletes
+> or moves osu!'s content-addressed blobs.
 
 ## What works today
 
@@ -32,7 +34,8 @@ then queue complete beatmap sets for osu!lazer's own reference-aware cleanup.
 - Storage and cleanup views for large sets, video-containing sets, old or
   missing play timestamps, and low persisted star ratings.
 - Guarded deletion previews that expand any selected difficulty to its complete
-  beatmap set and block protected or already-pending sets.
+  beatmap set, skip sets with recorded play evidence by default, and block
+  protected or already-pending sets.
 - Verified recovery packages containing a full Realm copy, every blob referenced
   by the selected sets, a manifest, and a re-importable `.olz` for each set.
 - A local operation history for scans, queued deletions, recovery, and failures.
@@ -87,6 +90,9 @@ fresh verified index + selected difficulties
                   |
                   v
        expand to complete beatmap sets
+                  |
+                  v
+default-on whole-set recorded-play protection
                   |
                   v
 schema/root/osu!/fingerprint/Protected checks
@@ -159,14 +165,20 @@ available.
 2. Select one or more difficulties. The preview expands the selection to every
    complete set containing those difficulties; individual-difficulty deletion
    is intentionally unavailable.
-3. Review the exact set count and logical size. The manager rechecks the data
-   root, schema 51, source fingerprint, process state, selected-set graph,
-   `Protected`, and `DeletePending` state.
-4. Type the displayed `DELETE 1 SET` or `DELETE N SETS` phrase exactly. Before
+3. Leave **Protect played sets** enabled (the default) to skip a complete set
+   whenever any difficulty in it has recorded play evidence, even when that
+   played difficulty is hidden or does not match the current filter. Evidence
+   means a `LastPlayed` timestamp, one or more local `Score` rows, or a positive
+   play count if a compatible adapter can provide one. Review the preview's
+   skipped and eligible set counts.
+4. Review the exact eligible set count and logical size. The manager rechecks
+   the data root, schema 51, source fingerprint, process state, selected-set
+   graph, whole-set play evidence, `Protected`, and `DeletePending` state.
+5. Type the displayed `DELETE 1 SET` or `DELETE N SETS` phrase exactly. Before
    any write, the manager copies and verifies the full `client.realm`, every
    unique blob referenced by the selected sets, a manifest, and one importable
    `.olz` archive per set.
-5. The manager sets only `DeletePending = true` for those sets in one Realm
+6. The manager sets only `DeletePending = true` for those sets in one Realm
    transaction. Start osu! to let its normal startup cleanup finalize deletion,
    or use Recovery to undo the queued flags **before opening osu!**.
 
@@ -214,11 +226,15 @@ relative-date operators.
   blobs can be removed during its own startup cleanup.
 - `LastPlayed` is a recorded timestamp, not a full play history. Local score
   count measures stored score rows; osu!lazer does not persist a count of every
-  play attempt in the indexed model.
+  play attempt in the indexed model. The played-set guard therefore means “no
+  locally recorded play evidence,” not proof that the set has never been
+  played. It deliberately treats either a timestamp or a score row as enough to
+  protect the complete set.
 - Star ratings are persisted base values and can be unavailable or differ after
   ruleset conversion and mods.
 - Hidden difficulties and sets already marked pending deletion are excluded from
-  the index.
+  the browser index. Hidden difficulties are still included when the deletion
+  manager decides whether a complete set has recorded play evidence.
 - Only verified schema 51 libraries can be freshly scanned. Cached data remains
   usable when a later schema is encountered.
 

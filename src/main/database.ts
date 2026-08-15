@@ -5,6 +5,7 @@ import { DatabaseSync } from "node:sqlite";
 import type {
   AppSettings,
   BeatmapDifficulty,
+  DeletionPolicy,
   FilterGroup,
   LibraryQuery,
   LibraryQueryResult,
@@ -27,6 +28,8 @@ export interface ResolvedDeletionSet {
   difficultyCount: number;
   logicalBytes: number;
   protected: boolean;
+  recordedPlayDifficulties: number;
+  hasRecordedPlay: boolean;
 }
 
 export interface DeletionSelectionResolution {
@@ -37,6 +40,9 @@ export interface DeletionSelectionResolution {
   affectedSets: number;
   logicalBytes: number;
   protectedSets: number;
+  playedSetsSkipped: number;
+  /** All difficulties in skipped sets, including unplayed siblings. */
+  playedDifficultiesSkipped: number;
   sets: ResolvedDeletionSet[];
   blockers: string[];
 }
@@ -85,6 +91,8 @@ export class AppDatabase {
         beatmap_set_id INTEGER,
         beatmap_set_local_id TEXT,
         set_protected INTEGER,
+        set_difficulty_count INTEGER,
+        set_has_recorded_play INTEGER,
         artist TEXT NOT NULL,
         title TEXT NOT NULL,
         difficulty_name TEXT NOT NULL,
@@ -180,10 +188,22 @@ export class AppDatabase {
         "ALTER TABLE beatmaps ADD COLUMN set_protected INTEGER",
       );
     }
+    if (!beatmapColumns.has("set_difficulty_count")) {
+      this.database.exec(
+        "ALTER TABLE beatmaps ADD COLUMN set_difficulty_count INTEGER",
+      );
+    }
+    if (!beatmapColumns.has("set_has_recorded_play")) {
+      this.database.exec(
+        "ALTER TABLE beatmaps ADD COLUMN set_has_recorded_play INTEGER",
+      );
+    }
     this.database.exec(`
       CREATE INDEX IF NOT EXISTS beatmaps_local_set_idx ON beatmaps(beatmap_set_local_id);
       INSERT OR IGNORE INTO schema_migrations(version, applied_at)
       VALUES (2, CURRENT_TIMESTAMP);
+      INSERT OR IGNORE INTO schema_migrations(version, applied_at)
+      VALUES (3, CURRENT_TIMESTAMP);
     `);
 
     const insertSetting = this.database.prepare(
@@ -221,12 +241,13 @@ export class AppDatabase {
     const insert = this.database.prepare(`
       INSERT INTO beatmaps (
         id, beatmap_id, beatmap_set_id, beatmap_set_local_id, set_protected,
+        set_difficulty_count, set_has_recorded_play,
         artist, title, difficulty_name, mapper, mode, status,
         bpm, duration_seconds, star_rating, approach_rate, overall_difficulty, circle_size,
         hp_drain, source, tags, audio_filename, has_background, has_video, ranked_at,
         imported_at, last_played_at, local_play_count, local_score_count, storage_bytes, content_hash
       ) VALUES (
-        ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+        ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
       )
     `);
 
@@ -240,6 +261,8 @@ export class AppDatabase {
           record.beatmapSetId,
           record.beatmapSetLocalId,
           Number(record.setProtected),
+          record.setDifficultyCount,
+          Number(record.setHasRecordedPlay),
           record.artist,
           record.title,
           record.difficultyName,
@@ -294,6 +317,14 @@ export class AppDatabase {
           : String(row.beatmap_set_local_id),
       setProtected:
         row.set_protected === null ? false : Boolean(row.set_protected),
+      setDifficultyCount:
+        row.set_difficulty_count === null
+          ? 0
+          : Number(row.set_difficulty_count),
+      setHasRecordedPlay:
+        row.set_has_recorded_play === null
+          ? false
+          : Boolean(row.set_has_recorded_play),
       artist: String(row.artist),
       title: String(row.title),
       difficultyName: String(row.difficulty_name),
@@ -420,11 +451,12 @@ export class AppDatabase {
   public resolveDeletionSelection(
     query: LibraryQuery,
     selection: SerializableSelection,
+    policy?: DeletionPolicy,
   ): DeletionSelectionResolution {
     const { sql: where, params } = compileWhere(query.filters, query.text);
     const filteredRows = this.database
       .prepare(
-        `SELECT id, beatmap_set_local_id, set_protected FROM beatmaps ${where}`,
+        `SELECT id, beatmap_set_local_id, set_protected, set_difficulty_count, set_has_recorded_play FROM beatmaps ${where}`,
       )
       .all(...params) as DatabaseRow[];
     const included = new Set(selection.included);
@@ -449,11 +481,15 @@ export class AppDatabase {
     }
 
     const staleRows = selectedRows.filter(
-      (row) => row.beatmap_set_local_id === null || row.set_protected === null,
+      (row) =>
+        row.beatmap_set_local_id === null ||
+        row.set_protected === null ||
+        row.set_difficulty_count === null ||
+        row.set_has_recorded_play === null,
     );
     if (staleRows.length > 0) {
       blockers.push(
-        "Run a fresh library scan before deleting. Some selected rows do not have a verified local set identity or protected state.",
+        "Run a fresh library scan before deleting. Some selected rows do not have verified set identity, difficulty-count, protected-state, or play-history evidence.",
       );
     }
 
@@ -479,30 +515,72 @@ export class AppDatabase {
                 MIN(artist) AS artist,
                 MIN(title) AS title,
                 MIN(mapper) AS mapper,
-                COUNT(*) AS difficulty_count,
+                COUNT(*) AS visible_difficulty_count,
+                MAX(set_difficulty_count) AS set_difficulty_count,
                 COALESCE(MAX(storage_bytes), 0) AS logical_bytes,
-                MAX(COALESCE(set_protected, 0)) AS set_protected
+                MAX(COALESCE(set_protected, 0)) AS set_protected,
+                MAX(COALESCE(set_has_recorded_play, 0)) AS set_has_recorded_play,
+                SUM(CASE
+                  WHEN last_played_at IS NOT NULL
+                    OR COALESCE(local_play_count, 0) > 0
+                    OR COALESCE(local_score_count, 0) > 0
+                  THEN 1 ELSE 0
+                END) AS recorded_play_difficulties
                FROM beatmaps
                WHERE beatmap_set_local_id IN (SELECT value FROM json_each(?))
                GROUP BY beatmap_set_local_id
                ORDER BY artist COLLATE NOCASE, title COLLATE NOCASE, beatmap_set_local_id`,
             )
             .all(JSON.stringify(setLocalIds)) as DatabaseRow[]);
-    const sets: ResolvedDeletionSet[] = rows.map((row) => ({
+    const candidateSets: ResolvedDeletionSet[] = rows.map((row) => ({
       beatmapSetLocalId: String(row.beatmap_set_local_id),
       beatmapSetId:
         row.beatmap_set_id === null ? null : Number(row.beatmap_set_id),
       artist: String(row.artist),
       title: String(row.title),
       mapper: String(row.mapper),
-      difficultyCount: Number(row.difficulty_count),
+      difficultyCount:
+        Number(row.set_difficulty_count) > 0
+          ? Number(row.set_difficulty_count)
+          : Number(row.visible_difficulty_count),
       logicalBytes: Number(row.logical_bytes),
       protected: Boolean(row.set_protected),
+      recordedPlayDifficulties: Number(row.recorded_play_difficulties),
+      hasRecordedPlay:
+        Boolean(row.set_has_recorded_play) ||
+        Number(row.recorded_play_difficulties) > 0,
     }));
+    // Only an explicit boolean false may disable this guard. This makes old,
+    // missing, or malformed callers fail closed at the data boundary.
+    const protectPlayedSets = policy?.protectPlayedSets !== false;
+    const playedSets = protectPlayedSets
+      ? candidateSets.filter((set) => set.hasRecordedPlay)
+      : [];
+    const playedSetsSkipped = playedSets.length;
+    const playedDifficultiesSkipped = playedSets.reduce(
+      (total, set) => total + set.difficultyCount,
+      0,
+    );
+    const playedSetIds = new Set(
+      playedSets.map((set) => set.beatmapSetLocalId),
+    );
+    const sets = candidateSets.filter(
+      (set) => !playedSetIds.has(set.beatmapSetLocalId),
+    );
     const protectedSets = sets.filter((set) => set.protected).length;
     if (protectedSets > 0) {
       blockers.push(
         `${protectedSets.toLocaleString()} selected set${protectedSets === 1 ? " is" : "s are"} protected by osu!lazer and cannot be deleted.`,
+      );
+    }
+    if (
+      protectPlayedSets &&
+      candidateSets.length > 0 &&
+      sets.length === 0 &&
+      playedSetsSkipped > 0
+    ) {
+      blockers.push(
+        "Every selected set was skipped because at least one difficulty has a recorded play or score.",
       );
     }
 
@@ -517,6 +595,8 @@ export class AppDatabase {
       affectedSets: sets.length,
       logicalBytes: sets.reduce((total, set) => total + set.logicalBytes, 0),
       protectedSets,
+      playedSetsSkipped,
+      playedDifficultiesSkipped,
       sets,
       blockers,
     };

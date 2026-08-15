@@ -19,6 +19,7 @@ import type {
   DeletionBackupManifest,
   DeletionBackupResource,
   DeletionBackupSet,
+  DeletionPolicy,
   DeletionPreview,
   DeletionResult,
   LibraryQuery,
@@ -47,6 +48,7 @@ interface DeletionPlan {
   preview: DeletionPreview;
   libraryPath: string;
   sets: ResolvedDeletionSet[];
+  protectPlayedSets: boolean;
 }
 
 class SourceMutationError extends Error {
@@ -78,6 +80,43 @@ function dynamicList(value: unknown): DynamicObject[] {
   return Array.from(value as Iterable<unknown>).filter(
     (item): item is DynamicObject => item !== null && typeof item === "object",
   );
+}
+
+function hasRecordedPlayInTargets(
+  realm: Realm,
+  targets: DynamicObject[],
+): boolean {
+  const targetIds = new Set<string>();
+  const targetHashes = new Set<string>();
+  for (const set of targets) {
+    for (const beatmap of dynamicList(set.Beatmaps)) {
+      const id = realmIdentifier(beatmap.ID);
+      const hash =
+        typeof beatmap.Hash === "string" ? beatmap.Hash.toLowerCase() : "";
+      if (beatmap.LastPlayed !== null && beatmap.LastPlayed !== undefined) {
+        return true;
+      }
+      if (id) targetIds.add(id);
+      if (hash) targetHashes.add(hash);
+    }
+  }
+
+  for (const value of realm.objects("Score")) {
+    const score = value as unknown as DynamicObject;
+    const beatmap = dynamicObject(score.BeatmapInfo);
+    const id = beatmap ? realmIdentifier(beatmap.ID) : "";
+    const hash =
+      typeof score.BeatmapHash === "string"
+        ? score.BeatmapHash.toLowerCase()
+        : "";
+    if (
+      (id !== "" && targetIds.has(id)) ||
+      (hash !== "" && targetHashes.has(hash))
+    ) {
+      return true;
+    }
+  }
+  return false;
 }
 
 function cleanError(error: unknown): string {
@@ -182,10 +221,14 @@ export class DeletionManager {
   public async previewDeletion(
     query: LibraryQuery,
     selection: SerializableSelection,
+    policy?: DeletionPolicy,
   ): Promise<DeletionPreview> {
     this.expirePlans();
     const db = this.database();
-    const resolution = db.resolveDeletionSelection(query, selection);
+    const protectPlayedSets = policy?.protectPlayedSets !== false;
+    const resolution = db.resolveDeletionSelection(query, selection, {
+      protectPlayedSets,
+    });
     const settings = db.getSettings();
     const blockers = [...resolution.blockers];
     const libraryPath = settings.libraryPath
@@ -243,6 +286,8 @@ export class DeletionManager {
       // safety copy; this is a conservative Realm + blobs + archives estimate.
       uniqueBackupBytes: estimatedBackupBytes,
       protectedSets: resolution.protectedSets,
+      playedSetsSkipped: resolution.playedSetsSkipped,
+      playedDifficultiesSkipped: resolution.playedDifficultiesSkipped,
       examples: resolution.sets.slice(0, 8).map((set) => ({
         beatmapSetId: set.beatmapSetId,
         artist: set.artist,
@@ -264,6 +309,7 @@ export class DeletionManager {
         preview,
         libraryPath,
         sets: resolution.sets,
+        protectPlayedSets,
       });
     }
     return preview;
@@ -1105,6 +1151,15 @@ export class DeletionManager {
           );
         }
       }
+      // This covers hidden difficulties and score rows, and makes a stale or
+      // incomplete cached index fail closed before any source mutation.
+      if (plan.protectPlayedSets && hasRecordedPlayInTargets(realm, targets)) {
+        throw new Error(
+          "A selected set now has a recorded play or score. Nothing was changed; rescan and review the skipped sets.",
+        );
+      }
+      // Keep the strict process check adjacent to the transaction: walking a
+      // large Score table above must not widen the game-open race window.
       if (await this.gameIsRunning()) {
         throw new Error(
           "osu!lazer opened before the Realm write; nothing was changed.",

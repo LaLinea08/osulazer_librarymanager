@@ -1,3 +1,4 @@
+import { useState } from "react";
 import {
   ArchiveRestore,
   CheckCircle2,
@@ -10,6 +11,7 @@ import {
   History,
   Info,
   Library,
+  LoaderCircle,
   RefreshCw,
   SearchCheck,
   ShieldAlert,
@@ -19,9 +21,11 @@ import {
 import type {
   AppBuildInfo,
   AppSettings,
+  DeletionResult,
   LibraryStatistics,
   LibraryStatus,
   OperationRecord,
+  QuarantineRecord,
 } from "../../../shared/contracts";
 import { formatBytes, formatDate, titleCase } from "../lib/format";
 
@@ -106,10 +110,10 @@ export function StoragePage({
       <div className="safety-banner">
         <ShieldCheck size={19} />
         <div>
-          <strong>Analysis only</strong>
+          <strong>Source blobs remain under osu!lazer&apos;s control</strong>
           <span>
-            The manager does not rename, move, quarantine, or delete hashed
-            resources.
+            Recovery copies are app-owned. Source hashes are never moved or
+            removed directly; deletion is queued through DeletePending.
           </span>
         </div>
       </div>
@@ -195,13 +199,217 @@ export function CleanupPage({ onPreset }: CleanupPageProps): React.JSX.Element {
       <div className="safety-banner">
         <Trash2 size={19} />
         <div>
-          <strong>Deletion is not available in this release</strong>
+          <strong>Cleanup always opens a protected review</strong>
           <span>
-            osu!lazer has no supported external library-mutation API. Matching a
-            cleanup preset can never change game data.
+            A preset only selects candidates. Deletion still requires a fresh
+            whole-set preview, verified backup, and exact confirmation phrase.
           </span>
         </div>
       </div>
+    </div>
+  );
+}
+
+interface QuarantinePageProps {
+  records: QuarantineRecord[];
+  osuIsRunning: boolean;
+  onRefresh: () => Promise<void>;
+  onRestore: (operationId: string) => Promise<DeletionResult>;
+}
+
+export function QuarantinePage({
+  records,
+  osuIsRunning,
+  onRefresh,
+  onRestore,
+}: QuarantinePageProps): React.JSX.Element {
+  const [busyOperation, setBusyOperation] = useState<string | null>(null);
+  const [refreshing, setRefreshing] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+
+  const refresh = async (): Promise<void> => {
+    setRefreshing(true);
+    setError(null);
+    try {
+      await onRefresh();
+    } catch (caught) {
+      setError(
+        caught instanceof Error
+          ? caught.message
+          : "Recovery records could not be refreshed.",
+      );
+    } finally {
+      setRefreshing(false);
+    }
+  };
+
+  const restore = async (operationId: string): Promise<void> => {
+    setBusyOperation(operationId);
+    setError(null);
+    setNotice(null);
+    try {
+      const result = await onRestore(operationId);
+      setNotice(result.message);
+    } catch (caught) {
+      setError(
+        caught instanceof Error ? caught.message : "Restore could not run.",
+      );
+    } finally {
+      setBusyOperation(null);
+    }
+  };
+
+  return (
+    <div className="page-scroll content-page quarantine-page">
+      <div className="page-intro">
+        <div>
+          <span className="eyebrow">Recovery</span>
+          <h1>Quarantine &amp; restore</h1>
+          <p>
+            Verified recovery backups for protected deletions, including the
+            window in which queued deletion can still be undone automatically.
+          </p>
+        </div>
+        <button
+          className="secondary-button"
+          disabled={refreshing}
+          onClick={() => void refresh()}
+          type="button"
+        >
+          <RefreshCw className={refreshing ? "spin" : ""} size={15} />
+          Refresh
+        </button>
+      </div>
+
+      <div className="quarantine-warning">
+        <ShieldAlert size={21} />
+        <div>
+          <strong>Automatic restore has a strict time window</strong>
+          <span>
+            Restore before osu!lazer starts and processes{" "}
+            <code>DeletePending</code>. After osu!lazer removes its Realm rows,
+            this app keeps the recovery backup but cannot safely recreate those
+            rows automatically.
+          </span>
+        </div>
+      </div>
+
+      {osuIsRunning && (
+        <div className="inline-warning quarantine-running" role="status">
+          Close osu!lazer before restoring. The restore buttons remain locked
+          while the game is running.
+        </div>
+      )}
+      {error && (
+        <div className="inline-error" role="alert">
+          {error}
+        </div>
+      )}
+      {notice && (
+        <div className="quarantine-notice" role="status">
+          <CheckCircle2 size={17} /> {notice}
+        </div>
+      )}
+
+      <section className="quarantine-list" aria-label="Recovery backups">
+        {records.length === 0 ? (
+          <div className="empty-feature">
+            <ArchiveRestore size={27} />
+            <strong>No recovery backups yet</strong>
+            <span>
+              A protected deletion creates a verified backup before queuing any
+              set in osu!lazer.
+            </span>
+          </div>
+        ) : (
+          records.map((record) => {
+            const restoring = busyOperation === record.operationId;
+            return (
+              <article className="quarantine-record" key={record.operationId}>
+                <header>
+                  <div>
+                    <span
+                      className={"quarantine-status status-" + record.status}
+                    >
+                      {titleCase(record.status)}
+                    </span>
+                    <strong>{record.summary}</strong>
+                    <small>{formatDate(record.createdAt)}</small>
+                  </div>
+                  <button
+                    className="secondary-button"
+                    disabled={
+                      !record.canRestore ||
+                      osuIsRunning ||
+                      Boolean(busyOperation)
+                    }
+                    onClick={() => void restore(record.operationId)}
+                    title={
+                      record.canRestore
+                        ? "Undo this queued deletion"
+                        : (record.restoreBlockedReason ?? "Restore unavailable")
+                    }
+                    type="button"
+                  >
+                    {restoring ? (
+                      <LoaderCircle className="spin" size={15} />
+                    ) : (
+                      <ArchiveRestore size={15} />
+                    )}
+                    Restore queued sets
+                  </button>
+                </header>
+                <div className="quarantine-metrics">
+                  <div>
+                    <span>Sets</span>
+                    <strong>{record.affectedSets.toLocaleString()}</strong>
+                  </div>
+                  <div>
+                    <span>Difficulties</span>
+                    <strong>
+                      {record.affectedDifficulties.toLocaleString()}
+                    </strong>
+                  </div>
+                  <div>
+                    <span>Logical resources</span>
+                    <strong>{formatBytes(record.logicalBytes)}</strong>
+                  </div>
+                  <div>
+                    <span>Backup size</span>
+                    <strong>{formatBytes(record.uniqueBackupBytes)}</strong>
+                  </div>
+                </div>
+                <div className="quarantine-path">
+                  <code title={record.backupPath}>{record.backupPath}</code>
+                  <button
+                    aria-label="Copy recovery path"
+                    className="icon-button subtle"
+                    onClick={() =>
+                      void window.libraryManager.copyText(record.backupPath)
+                    }
+                    title="Copy recovery path"
+                    type="button"
+                  >
+                    <CopyCheck size={14} />
+                  </button>
+                </div>
+                {(record.restoreBlockedReason || record.details) && (
+                  <p
+                    className={
+                      record.restoreBlockedReason
+                        ? "quarantine-blocked"
+                        : undefined
+                    }
+                  >
+                    {record.restoreBlockedReason ?? record.details}
+                  </p>
+                )}
+              </article>
+            );
+          })
+        )}
+      </section>
     </div>
   );
 }
@@ -218,8 +426,8 @@ export function HistoryPage({
           <span className="eyebrow">Audit trail</span>
           <h1>Operation history</h1>
           <p>
-            Every scan and blocked management action is recorded in the
-            manager’s own database.
+            Every scan, protected deletion, restore, and failure is recorded in
+            the manager’s own database.
           </p>
         </div>
       </div>
@@ -382,11 +590,17 @@ export function SettingsPage({
           <span>
             <CheckCircle2 size={15} /> App-owned SQLite index
           </span>
-          <span className="blocked">
-            <CircleSlash2 size={15} /> osu!lazer writes disabled
+          <span className={status.capabilities.writeLibrary ? "" : "blocked"}>
+            {status.capabilities.writeLibrary ? (
+              <ShieldCheck size={15} />
+            ) : (
+              <CircleSlash2 size={15} />
+            )}
+            Whole-set DeletePending writes{" "}
+            {status.capabilities.writeLibrary ? "verified" : "locked"}
           </span>
-          <span className="blocked">
-            <CircleSlash2 size={15} /> Delete and quarantine disabled
+          <span>
+            <CheckCircle2 size={15} /> Recovery backup before every write
           </span>
         </div>
       </section>
@@ -421,7 +635,7 @@ export function SettingsPage({
 export function FeaturePlaceholder({
   type,
 }: {
-  type: "collections" | "duplicates" | "quarantine";
+  type: "collections" | "duplicates";
 }): React.JSX.Element {
   const content = {
     collections: {
@@ -435,12 +649,6 @@ export function FeaturePlaceholder({
       eyebrow: "Duplicate finder",
       title: "Confidence needs evidence",
       body: "Exact hash, online ID, and metadata comparison will be added as an analysis-only workflow. Uncertain matches will always require manual review.",
-    },
-    quarantine: {
-      icon: ArchiveRestore,
-      eyebrow: "Recovery",
-      title: "Quarantine is intentionally unavailable",
-      body: "Hashed blobs can be shared across many Realm owners. Moving them externally would corrupt references, so this screen stays disabled until osu! provides a supported workflow.",
     },
   }[type];
   const Icon = content.icon;

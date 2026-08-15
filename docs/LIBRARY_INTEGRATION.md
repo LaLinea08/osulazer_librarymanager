@@ -2,26 +2,43 @@
 
 ## Status and scope
 
-This document defines the safety and compatibility contract for reading an
-osu!lazer library. It records the architecture verified on **2026-08-15** for
-Realm schema **51** and describes the behavior implemented by
-[`src/main/library-integration.ts`](../src/main/library-integration.ts).
+This document defines the safety and compatibility contract for scanning and
+guarded whole-set maintenance of an osu!lazer library. It records the
+architecture verified on **2026-08-15** for Realm schema **51** and describes
+the behavior implemented by
+[`src/main/library-integration.ts`](../src/main/library-integration.ts) and
+[`src/main/deletion-manager.ts`](../src/main/deletion-manager.ts).
 
-The integration is deliberately read-only. It is a library browser and indexer,
-not an external implementation of osu!lazer's database lifecycle. Any behavior
-not explicitly listed as supported in the capability matrix must remain
-disabled.
+Indexing remains deliberately read-only: the scanner opens only an app-owned
+snapshot and writes extracted data only to the application's SQLite database.
+The deletion manager is one explicit, tightly guarded exception. It reproduces
+the reviewed schema-51 whole-set `DeletePending` transition after creating a
+verified recovery package. This is an **unsupported external maintenance
+integration**, not an official osu! API.
 
-The important invariants are:
+The scan invariants are:
 
-- Never open the user's `client.realm` with Realm.
-- Never write, migrate, compact, recover, rename, or delete anything in the
-  osu!lazer data root.
-- Never treat the hashed `files` directory as a collection of independent
-  beatmap folders.
+- Never open the user's `client.realm` with Realm while scanning.
 - Never replace the last successful application index unless a complete scan
   has succeeded.
-- Reject an unverified Realm schema instead of guessing.
+- Reject an unverified Realm schema or shape instead of guessing.
+- Treat the hashed `files` directory as a shared content store, never as
+  independent beatmap folders.
+
+The mutation invariants are:
+
+- Support complete beatmap sets only; selecting a difficulty expands to its
+  containing set.
+- Require schema 51, a closed osu! process, an exact source fingerprint match,
+  and an unchanged selected-set file graph.
+- Treat `Protected` as a hard block and reject sets already pending deletion.
+- Finish and verify a full Realm copy, every blob referenced by the selected
+  sets, a manifest, and one `.olz` archive per set before touching the source.
+- In one Realm transaction, change only `BeatmapSet.DeletePending`; never delete
+  Realm objects or move/delete source blobs directly.
+- Permit automatic undo only while the records still exist and osu! remains
+  closed; otherwise retain `.olz` archives for manual re-import.
+- Make no promise that a logical set byte total will be physically reclaimed.
 
 ## Verified storage architecture
 
@@ -182,6 +199,64 @@ Cancellation, invalid paths, a running game, source changes, unsupported schemas
 and read errors all preserve the previous SQLite index. The operation history
 records that the attempted scan did not replace it.
 
+## Guarded whole-set deletion workflow
+
+The deletion flow deliberately mirrors only osu!lazer's reversible whole-set
+transition. Upstream's set-delete UI calls `BeatmapManager.Delete(set)`, whose
+base `ModelManager.Delete()` operation sets `DeletePending = true`. On a later
+osu! startup, `RealmAccess` removes pending records and asks `RealmFileStore` to
+delete only blobs whose global Realm usage count has reached zero. This manager
+queues the flag and leaves record and blob cleanup to osu! itself.
+
+There is no reviewed external IPC, CLI, or public API for this operation. The
+implementation therefore fails closed and performs the following sequence:
+
+1. Resolve selected difficulty IDs from the last successful index and expand
+   them to an exact, deduplicated set-ID list. A subset of a set is never a valid
+   deletion target.
+2. Require the configured data root, Realm schema 51, a closed osu! process, and
+   an indexed source fingerprint that exactly matches the live `client.realm`.
+3. Require the exact `DELETE 1 SET` or `DELETE N SETS` confirmation phrase.
+4. Create an app-owned operation directory and a preparing manifest.
+5. Copy the complete `client.realm` and verify its size and SHA-256 digest.
+6. Open only that backup read-only, resolve every selected set, and reject a
+   missing, `Protected`, or already-pending set.
+7. Copy every unique blob referenced by those sets to the operation directory,
+   preserving its content-addressed path, and verify each byte count and SHA-256
+   digest. Blobs shared among selected sets are stored once.
+8. Build one standard ZIP-format `.olz` per set from its exact logical
+   filenames. Reject unsafe paths, duplicate exact filenames, and archives with
+   no top-level `.osu`; reopen each archive and verify every entry's size and
+   hash.
+9. Recheck free space, osu! process state, the source fingerprint, exact target
+   count, protection/pending state, and every live filename/hash relationship.
+10. Open the live Realm with format upgrades disabled and execute one
+    transaction that changes only each target set's `DeletePending` field to
+    `true`. If the transaction throws, Realm rolls it back; the manager also
+    verifies the flags after closing and reopening read-only.
+11. Keep the recovery package and refresh the app-owned index. The manager does
+    not delete, rename, or move any file in osu!'s `files/` tree.
+
+### Recovery states
+
+A queued operation remains automatically reversible only before osu! finalizes
+startup cleanup. With osu! closed, Recovery revalidates the configured root and
+schema, verifies that every set record still exists, makes an additional
+pre-restore Realm copy, and clears all target `DeletePending` flags in one
+transaction. If any target record is gone, the operation is marked finalized
+and no partial automatic restore is attempted.
+
+The verified `.olz` files are retained in every recovery package. After
+finalization they can be imported into osu! manually; osu!'s importer accepts
+`.olz` as a ZIP archive and requires a valid top-level `.osu` entry. A re-import
+can restore the beatmap content but is not a byte-for-byte rollback of every
+piece of library history or application state.
+
+The preview's byte count is the selected sets' logical size. It is useful for
+scale and backup-space planning, but it is not a promise of physical bytes
+reclaimed. Other sets, scores, replays, or skins may share a blob, and osu!'s
+own zero-usage cleanup makes the final decision.
+
 ## Indexed field semantics and limitations
 
 ### Identity
@@ -262,7 +337,9 @@ The difficulty status is preferred, with set status as a fallback.
 - Sets with `DeletePending == true` are excluded, matching osu!lazer's usable-set
   query behavior.
 - Difficulties with `Hidden == true` are excluded from the current index.
-- Protected state is readable but is not currently exposed as a write capability.
+- `BeatmapSet.Protected` is captured for guarded maintenance and is a hard
+  deletion block. This is stricter than calling the generic object-level
+  `Delete()` method directly and matches osu!'s guarded bulk-delete behavior.
 
 ### Media and storage
 
@@ -278,33 +355,38 @@ The difficulty status is preferred, with set status as a fallback.
 - The reported set size is a **logical set size**, not a deletion-recovery
   estimate. Blobs can be shared by other sets, scores, replays, or skins.
 - A trustworthy reclaim estimate would require a complete global reference graph
-  and may count a blob only when every Realm usage is removed. That is not
-  currently implemented.
+  and may count a blob only when every Realm usage is removed. The deletion
+  preview intentionally does not claim to provide that estimate.
+- Deletion never removes blobs directly. osu!'s startup cleanup removes a blob
+  only after its Realm usage count reaches zero.
 - Missing resources are recorded as zero bytes and make the scan partial; they
   are not classified as safe to delete or auto-repair.
 
 ## Capability matrix
 
-| Capability                                        | Schema 51 | Notes                                                                                                                  |
-| ------------------------------------------------- | :-------: | ---------------------------------------------------------------------------------------------------------------------- |
-| Discover default/custom data root                 |    Yes    | Candidate must contain `client.realm` and `files/`                                                                     |
-| Read beatmap/set metadata                         |    Yes    | Hidden difficulties and pending-deletion sets are excluded                                                             |
-| Read ruleset and ranked status                    |    Yes    | Unknown values degrade to `unknown`                                                                                    |
-| Read AR/OD/CS/HP, BPM, length, base stars         |    Yes    | Unknown and not-calculated values stay nullable                                                                        |
-| Read set-added, ranked, and last-played dates     |    Yes    | Set-added is not per difficulty                                                                                        |
-| Read local score presence/count                   |    Yes    | Score rows, not play attempts                                                                                          |
-| Read collections                                  |  Limited  | The Realm model is readable; the current scan indexes only the collection count, and membership editing is unavailable |
-| Compute logical set storage                       |    Yes    | Deduplicated inside a set; not reclaimable bytes                                                                       |
-| Detect referenced missing blobs                   |    Yes    | Diagnostic only; no repair                                                                                             |
-| Browse the last successful cache while osu! runs  |    Yes    | A fresh Realm scan is blocked                                                                                          |
-| Fresh scan while osu! runs                        |    No     | Close osu! and retry                                                                                                   |
-| Open/play URLs or app-owned metadata actions      |    Yes    | Must not mutate the lazer data root                                                                                    |
-| Write app-owned tags, saved searches, and history |    Yes    | Stored only in the application's SQLite database                                                                       |
-| Add/remove/rename osu! collections                |    No     | Requires a verified supported write interface                                                                          |
-| Hide or delete a difficulty                       |    No     | The internal immediate delete path has no undo                                                                         |
-| Delete/quarantine a set                           |    No     | Hashed blobs are shared; direct filesystem quarantine is invalid                                                       |
-| Repair Realm or orphaned files                    |    No     | Diagnostic reporting only                                                                                              |
-| Any direct `client.realm` or `files/` mutation    |    No     | Explicit safety boundary                                                                                               |
+| Capability                                        | Schema 51 | Notes                                                                                                                           |
+| ------------------------------------------------- | :-------: | ------------------------------------------------------------------------------------------------------------------------------- |
+| Discover default/custom data root                 |    Yes    | Candidate must contain `client.realm` and `files/`                                                                              |
+| Read beatmap/set metadata                         |    Yes    | Hidden difficulties and pending-deletion sets are excluded                                                                      |
+| Read ruleset and ranked status                    |    Yes    | Unknown values degrade to `unknown`                                                                                             |
+| Read AR/OD/CS/HP, BPM, length, base stars         |    Yes    | Unknown and not-calculated values stay nullable                                                                                 |
+| Read set-added, ranked, and last-played dates     |    Yes    | Set-added is not per difficulty                                                                                                 |
+| Read local score presence/count                   |    Yes    | Score rows, not play attempts                                                                                                   |
+| Read collections                                  |  Limited  | The model is readable; only collection count is indexed and membership editing is unavailable                                   |
+| Compute logical set storage                       |    Yes    | Deduplicated inside a set; not promised reclaimable bytes                                                                       |
+| Detect referenced missing blobs                   |    Yes    | Diagnostic only; missing target blobs block guarded deletion                                                                    |
+| Browse the last successful cache while osu! runs  |    Yes    | Fresh scans and all maintenance are blocked                                                                                     |
+| Fresh scan while osu! runs                        |    No     | Close osu! and retry                                                                                                            |
+| Queue complete sets for deletion                  |  Guarded  | Unsupported external integration; exact schema/root/fingerprint/graph checks, protected-set block, and verified backup required |
+| Undo a queued whole-set deletion                  |  Guarded  | Only before osu! cleanup, with all records present and osu! closed                                                              |
+| Recover finalized content from `.olz`             |  Manual   | Retained archives can be re-imported; not a complete history rollback                                                           |
+| Delete or hide one difficulty                     |    No     | Upstream's immediate difficulty-delete path has no undo                                                                         |
+| Delete or move a source blob directly             |    No     | Blobs are shared; only osu!'s reference-aware cleanup may remove them                                                           |
+| Set or clear `BeatmapSet.DeletePending`           |  Guarded  | The only live Realm property this application changes, for an exact set list in one transaction                                 |
+| Open/play URLs or app-owned metadata actions      |    Yes    | No lazer data-root mutation                                                                                                     |
+| Write app-owned tags, saved searches, and history |    Yes    | Stored only in the application's SQLite database                                                                                |
+| Add/remove/rename osu! collections                |    No     | No verified supported write interface                                                                                           |
+| Repair Realm or orphaned files                    |    No     | Diagnostic reporting only                                                                                                       |
 
 ## Compatibility behavior
 
@@ -326,6 +408,11 @@ Behavior by condition:
 | Realm file unreadable or format upgrade required | Fail without retrying against the source; preserve the previous cache                                               |
 | osu! running or source changed during copy       | Abort the fresh scan and preserve the previous cache                                                                |
 | Referenced blob missing                          | Complete as a partial scan with a diagnostic count                                                                  |
+| Guarded deletion on verified schema 51           | Continue only after all backup, process, fingerprint, protection, and graph checks pass                             |
+| Deletion source differs from indexed fingerprint | Block before backup/write and require a fresh scan                                                                  |
+| Deletion target is protected or already pending  | Block the entire operation; never queue a partial selection                                                         |
+| osu! starts or live set graph changes mid-flow   | Block before the transaction; retain any completed app-owned recovery package                                       |
+| Undo target was finalized by osu!                | Do not partially recreate Realm records; retain verified `.olz` archives for manual import                          |
 
 Adding support for another schema requires all of the following:
 
@@ -339,60 +426,88 @@ Adding support for another schema requires all of the following:
 Do not broaden acceptance to a version range merely because a sample database
 appears to open.
 
-## Why modification remains disabled
+## Why the guarded write is narrow
 
 osu!lazer's internal management operations coordinate more than one record or
-file:
+file. Set deletion is unusually suitable for a guarded external queue because
+the first transition is reversible: it sets `DeletePending`, and the game's own
+later startup cleanup removes the records and only zero-usage blobs. The manager
+implements exactly that initial transition for a fixed set list and backs up
+everything needed for recovery first.
 
-- Set deletion first marks `DeletePending`.
-- Startup cleanup removes beatmaps and their metadata, then removes physical
-  files only after their global Realm usage count reaches zero.
-- Single-difficulty deletion has a separate immediate path and explicitly has no
-  undo.
-- Saves change SHA-256 and MD5 values, update collection references, reconnect
-  scores, update set hashes/status, and invalidate caches.
-- Protected sets and Realm threading/transaction rules are enforced inside the
-  game's management layer.
-- Realm startup itself may migrate, compact, recover, back up, or replace a
-  database under specific conditions.
+It does not claim parity with osu!'s in-process management layer. In particular,
+osu!'s internal backup and operation-blocking APIs are not available over IPC,
+and the reviewed desktop command handling supports imports and osu! links rather
+than library maintenance. The manager compensates by requiring the game to be
+closed, checking a stable fingerprint and exact object graph repeatedly, opening
+with format upgrades disabled, using one transaction, and verifying the result.
+Those checks reduce risk but do not turn the integration into a supported API.
 
-Setting a flag or deleting a hash file externally would bypass that lifecycle.
-There is no documented external local-library mutation API in the verified
-sources. Until osu! exposes a supported IPC, CLI, or other management contract,
-the application must keep `writeLibrary: false` and place all custom state in its
-own database.
+All broader mutation remains disabled:
 
-A future recoverable workflow may export selected content to an app-owned backup
-and then hand a supported operation to osu!, but moving blobs out of `files/` is
-never a valid quarantine design.
+- Single-difficulty deletion is an immediate upstream path with no undo.
+- Saves can change SHA-256 and MD5 values, update collection references,
+  reconnect scores, update set hashes/status, and invalidate caches.
+- Collection changes, hiding, metadata edits, migration, compaction, recovery,
+  and Realm repair require lifecycle behavior this application does not own.
+- Directly deleting or moving a hash file bypasses shared-reference accounting
+  and is never a valid quarantine design.
+
+Custom tags, filters, operation records, manifests, Realm copies, blob copies,
+and `.olz` archives therefore remain app-owned. The only source-data write is
+the guarded `DeletePending` true/false transition documented above.
 
 ## Official primary sources
 
-The conclusions above are based on official project source and documentation:
+The deletion contract was reviewed against official osu! source commit
+[`fc39aa5`](https://github.com/ppy/osu/commit/fc39aa5cecd3d87576107506fe8036fc891111bc)
+from 2026-08-14. Pinning line links to that commit prevents a later `master`
+change from silently changing this document's evidence.
 
-- [osu! releases](https://github.com/ppy/osu/releases)
-- [User file storage wiki](https://github.com/ppy/osu/wiki/User-file-storage)
-- [`OsuGameBase`: `client.realm`, generated warning, and whole-directory backup guidance](https://github.com/ppy/osu/blob/master/osu.Game/OsuGameBase.cs)
-- [`RealmAccess`: schema history, schema 51, migrations, recovery, pending deletion cleanup, backup, and operation blocking](https://github.com/ppy/osu/blob/master/osu.Game/Database/RealmAccess.cs)
-- [`RealmFileStore`: SHA-256 storage and zero-usage cleanup](https://github.com/ppy/osu/blob/master/osu.Game/Database/RealmFileStore.cs)
-- [`OsuStorage`: custom storage and migration exclusions](https://github.com/ppy/osu/blob/master/osu.Game/IO/OsuStorage.cs)
-- [`StorageConfigManager`: `storage.ini` and `FullPath`](https://github.com/ppy/osu/blob/master/osu.Game/Configuration/StorageConfigManager.cs)
-- [`BeatmapSetInfo`](https://github.com/ppy/osu/blob/master/osu.Game/Beatmaps/BeatmapSetInfo.cs)
-- [`BeatmapInfo`](https://github.com/ppy/osu/blob/master/osu.Game/Beatmaps/BeatmapInfo.cs)
-- [`BeatmapMetadata`](https://github.com/ppy/osu/blob/master/osu.Game/Beatmaps/BeatmapMetadata.cs)
-- [`BeatmapDifficulty`](https://github.com/ppy/osu/blob/master/osu.Game/Beatmaps/BeatmapDifficulty.cs)
-- [`RulesetInfo`](https://github.com/ppy/osu/blob/master/osu.Game/Rulesets/RulesetInfo.cs)
-- [`RealmFile`](https://github.com/ppy/osu/blob/master/osu.Game/Models/RealmFile.cs)
-- [`RealmNamedFileUsage`](https://github.com/ppy/osu/blob/master/osu.Game/Models/RealmNamedFileUsage.cs)
-- [`ScoreInfo`](https://github.com/ppy/osu/blob/master/osu.Game/Scoring/ScoreInfo.cs)
-- [`BeatmapCollection`](https://github.com/ppy/osu/blob/master/osu.Game/Collections/BeatmapCollection.cs)
-- [`BeatmapOnlineStatus`](https://github.com/ppy/osu/blob/master/osu.Game/Beatmaps/BeatmapOnlineStatus.cs)
-- [`BeatmapManager`: query, hide, save, score-linking, and deletion behavior](https://github.com/ppy/osu/blob/master/osu.Game/Beatmaps/BeatmapManager.cs)
-- [`ModelManager`: soft-deletion transaction behavior](https://github.com/ppy/osu/blob/master/osu.Game/Database/ModelManager.cs)
-- [Realm usage rules](https://github.com/ppy/osu/wiki/Realm-usage-rules)
-- [`osu.Game.csproj`: current Realm dependency](https://github.com/ppy/osu/blob/master/osu.Game/osu.Game.csproj)
-- [Realm JS implementation: existing-file schema discovery, immutable read-only mode, schema inspection, and schema-version inspection](https://github.com/realm/realm-js/blob/main/packages/realm/src/Realm.ts)
+### Database and deletion lifecycle
 
-These links intentionally point to official upstream material. Because `master`
-can change, future compatibility reviews should record the release/tag or commit
-used to add each new schema adapter.
+- [`BeatmapDeleteDialog` calls the beatmap manager for a complete set](https://github.com/ppy/osu/blob/fc39aa5cecd3d87576107506fe8036fc891111bc/osu.Game/Screens/Select/BeatmapDeleteDialog.cs#L10-L24).
+- [`ModelManager.Delete()` and `Undelete()` set and clear `DeletePending` in write transactions](https://github.com/ppy/osu/blob/fc39aa5cecd3d87576107506fe8036fc891111bc/osu.Game/Database/ModelManager.cs#L192-L226).
+- [`BeatmapManager` bulk deletion excludes pending and protected sets](https://github.com/ppy/osu/blob/fc39aa5cecd3d87576107506fe8036fc891111bc/osu.Game/Beatmaps/BeatmapManager.cs#L413-L425),
+  while its [single-difficulty path is immediate and explicitly has no undo](https://github.com/ppy/osu/blob/fc39aa5cecd3d87576107506fe8036fc891111bc/osu.Game/Beatmaps/BeatmapManager.cs#L427-L452).
+- [`BeatmapSetInfo` persists `Files`, `Protected`, and `DeletePending`](https://github.com/ppy/osu/blob/fc39aa5cecd3d87576107506fe8036fc891111bc/osu.Game/Beatmaps/BeatmapSetInfo.cs#L43-L65).
+- [`RealmAccess` invokes pending-deletion cleanup during startup](https://github.com/ppy/osu/blob/fc39aa5cecd3d87576107506fe8036fc891111bc/osu.Game/Database/RealmAccess.cs#L208-L217)
+  and [deletes pending objects before handing unused files to the file store](https://github.com/ppy/osu/blob/fc39aa5cecd3d87576107506fe8036fc891111bc/osu.Game/Database/RealmAccess.cs#L382-L429).
+- [`RealmFile` uses the SHA-256 hash as its primary key and exposes usage backlinks](https://github.com/ppy/osu/blob/fc39aa5cecd3d87576107506fe8036fc891111bc/osu.Game/Models/RealmFile.cs#L9-L18),
+  and [`RealmNamedFileUsage` binds each logical filename to a Realm file](https://github.com/ppy/osu/blob/fc39aa5cecd3d87576107506fe8036fc891111bc/osu.Game/Models/RealmNamedFileUsage.cs#L12-L23).
+- [`RealmFileStore` deduplicates content by hash](https://github.com/ppy/osu/blob/fc39aa5cecd3d87576107506fe8036fc891111bc/osu.Game/Database/RealmFileStore.cs#L44-L59)
+  and [removes a blob only when it has zero usages](https://github.com/ppy/osu/blob/fc39aa5cecd3d87576107506fe8036fc891111bc/osu.Game/Database/RealmFileStore.cs#L91-L120).
+- [The deterministic `files/<first>/<first-two>/<hash>` path](https://github.com/ppy/osu/blob/fc39aa5cecd3d87576107506fe8036fc891111bc/osu.Game/Extensions/ModelExtensions.cs#L17-L24)
+  is derived from the content hash.
+- [Schema 51 and its migration boundary](https://github.com/ppy/osu/blob/fc39aa5cecd3d87576107506fe8036fc891111bc/osu.Game/Database/RealmAccess.cs#L75-L105)
+  and [the Realm .NET dependency](https://github.com/ppy/osu/blob/fc39aa5cecd3d87576107506fe8036fc891111bc/osu.Game/osu.Game.csproj#L39-L43)
+  are internal implementation details.
+- [`RealmAccess` backup and operation-blocking methods are in-process services](https://github.com/ppy/osu/blob/fc39aa5cecd3d87576107506fe8036fc891111bc/osu.Game/Database/RealmAccess.cs#L1330-L1455).
+  The [desktop command entry point handles osu! links and imports](https://github.com/ppy/osu/blob/fc39aa5cecd3d87576107506fe8036fc891111bc/osu.Desktop/Program.cs#L153-L177),
+  while the [reviewed IPC surface](https://github.com/ppy/osu/tree/fc39aa5cecd3d87576107506fe8036fc891111bc/osu.Game/IPC)
+  contains no external delete or backup command.
+
+### Recovery archive compatibility
+
+- [`BeatmapExporter` uses `.olz` for lazer beatmap exports](https://github.com/ppy/osu/blob/fc39aa5cecd3d87576107506fe8036fc891111bc/osu.Game/Database/BeatmapExporter.cs#L13-L22).
+- [`LegacyArchiveExporter` writes a UTF-8 standard ZIP containing every named set file and rejects duplicate exact names](https://github.com/ppy/osu/blob/fc39aa5cecd3d87576107506fe8036fc891111bc/osu.Game/Database/LegacyArchiveExporter.cs#L39-L88).
+- [`BeatmapImporter` accepts `.osz` and `.olz`](https://github.com/ppy/osu/blob/fc39aa5cecd3d87576107506fe8036fc891111bc/osu.Game/Beatmaps/BeatmapImporter.cs#L29-L34),
+  [recognizes the ZIP signature](https://github.com/ppy/osu/blob/fc39aa5cecd3d87576107506fe8036fc891111bc/osu.Game/Database/ImportTask.cs#L47-L70),
+  and [requires a valid top-level `.osu` file](https://github.com/ppy/osu/blob/fc39aa5cecd3d87576107506fe8036fc891111bc/osu.Game/Beatmaps/BeatmapImporter.cs#L309-L317).
+- [Archive imports standardize paths and reject traversal outside storage](https://github.com/ppy/osu/blob/fc39aa5cecd3d87576107506fe8036fc891111bc/osu.Game/Database/RealmArchiveModelImporter.cs#L517-L525),
+  while [exact duplicate entries are ambiguous to the ZIP reader](https://github.com/ppy/osu/blob/fc39aa5cecd3d87576107506fe8036fc891111bc/osu.Game/IO/Archives/ZipArchiveReader.cs#L55-L61).
+
+### Related data semantics and SDK behavior
+
+- [`BeatmapInfo` documents score links surviving beatmap removal](https://github.com/ppy/osu/blob/fc39aa5cecd3d87576107506fe8036fc891111bc/osu.Game/Beatmaps/BeatmapInfo.cs#L205-L217),
+  and [the importer reconnects matching scores](https://github.com/ppy/osu/blob/fc39aa5cecd3d87576107506fe8036fc891111bc/osu.Game/Beatmaps/BeatmapImporter.cs#L230-L234).
+- [`BeatmapCollection` stores beatmap MD5 hashes](https://github.com/ppy/osu/blob/fc39aa5cecd3d87576107506fe8036fc891111bc/osu.Game/Collections/BeatmapCollection.cs#L16-L36).
+- The official [user file storage wiki](https://github.com/ppy/osu/wiki/User-file-storage)
+  warns that the storage structure is implementation-managed.
+- Realm JS configuration documents
+  [`disableFormatUpgrade`](https://github.com/realm/realm-js/blob/5064bb5ed0bf7841ab2a94cd21f4c61fdeb38625/packages/realm/src/Configuration.ts#L61-L76)
+  and [read-only/dynamic-schema options](https://github.com/realm/realm-js/blob/5064bb5ed0bf7841ab2a94cd21f4c61fdeb38625/packages/realm/src/Configuration.ts#L127-L138).
+  Its [write implementation cancels the transaction when the callback throws](https://github.com/realm/realm-js/blob/5064bb5ed0bf7841ab2a94cd21f4c61fdeb38625/packages/realm/src/Realm.ts#L1049-L1072).
+
+Future schema support requires a new source review, fixtures, tests, and an
+updated pinned evidence set; a successful open alone is not compatibility proof.

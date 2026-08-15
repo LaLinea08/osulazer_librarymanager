@@ -192,10 +192,10 @@ export function Dashboard({
           </div>
           <div>
             <span className="eyebrow">Safety state</span>
-            <h3>Verified read-only integration</h3>
+            <h3>Verified safety integration</h3>
             <p>
-              Fresh scans run against an immutable copy of Realm schema 51.
-              Changes to osu!lazer are disabled.
+              Scans use an immutable Realm copy. Whole-set deletion requires a
+              fresh schema check, verified backup, and DeletePending write.
             </p>
           </div>
         </section>

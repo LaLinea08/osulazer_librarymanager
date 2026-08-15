@@ -43,6 +43,13 @@ const api: AppApi = {
     query: LibraryQuery,
     selection: SerializableSelection,
   ) => ipcRenderer.invoke(IPC.copySelectionMetadata, query, selection),
+  previewDeletion: (query: LibraryQuery, selection: SerializableSelection) =>
+    ipcRenderer.invoke(IPC.previewDeletion, query, selection),
+  executeDeletion: (previewId: string, confirmationPhrase: string) =>
+    ipcRenderer.invoke(IPC.executeDeletion, previewId, confirmationPhrase),
+  getQuarantineRecords: () => ipcRenderer.invoke(IPC.getQuarantineRecords),
+  restoreQuarantine: (operationId: string) =>
+    ipcRenderer.invoke(IPC.restoreQuarantine, operationId),
   copyText: (text: string) => ipcRenderer.invoke(IPC.copyText, text),
   openExternal: (url: string) => ipcRenderer.invoke(IPC.openExternal, url),
 };

@@ -3,15 +3,17 @@
 [![CI](https://github.com/LaLinea08/osulazer_librarymanager/actions/workflows/ci.yml/badge.svg)](https://github.com/LaLinea08/osulazer_librarymanager/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-A fast, safety-first Windows desktop browser for large osu!lazer beatmap
-libraries. It turns a verified read-only snapshot into a local SQLite index, so
-you can explore, filter, and analyze your library without changing osu!lazer's
-database or content store.
+A fast, safety-first Windows desktop browser and guarded whole-set maintenance
+tool for large osu!lazer beatmap libraries. Scanning turns a verified read-only
+snapshot into a local SQLite index. An explicitly confirmed maintenance flow can
+then queue complete beatmap sets for osu!lazer's own reference-aware cleanup.
 
 > [!IMPORTANT]
-> This release is analysis-only. It never writes to `client.realm` or the
-> content-addressed `files` store. Deletion, quarantine, collection editing,
-> duplicate removal, and export are not implemented.
+> Whole-set deletion is an **unsupported external integration**, not an official
+> osu! API. It is limited to verified Realm schema 51 libraries, requires osu!
+> to be closed, refuses protected sets, and creates a verified recovery package
+> before changing only `BeatmapSet.DeletePending` in one transaction. The
+> manager never directly deletes or moves osu!'s content-addressed blobs.
 
 ## What works today
 
@@ -27,11 +29,15 @@ database or content store.
   clipboard copying of selected beatmap metadata.
 - A details panel for metadata, online IDs, dates, local score rows, difficulty
   values, media flags, logical set size, and the encoded beatmap hash.
-- Analysis-only storage and cleanup views for large sets, video-containing sets,
-  old or missing play timestamps, and low persisted star ratings.
-- A local operation history for successful, partial, failed, and blocked scans.
+- Storage and cleanup views for large sets, video-containing sets, old or
+  missing play timestamps, and low persisted star ratings.
+- Guarded deletion previews that expand any selected difficulty to its complete
+  beatmap set and block protected or already-pending sets.
+- Verified recovery packages containing a full Realm copy, every blob referenced
+  by the selected sets, a manifest, and a re-importable `.olz` for each set.
+- A local operation history for scans, queued deletions, recovery, and failures.
 - Browsing of the last successful index while osu! is open. Fresh scans remain
-  blocked until the game is closed.
+  blocked until the game is closed, as do deletion and automatic recovery.
 
 Built-in library views include recently added, recently played, no recorded
 play timestamp, ranked, loved, graveyard, and each of osu!'s four game modes.
@@ -42,6 +48,8 @@ The current adapter accepts **Realm schema 51 only**. A Realm schema is an
 internal storage format, not an osu! release number. Earlier, later, or
 shape-incompatible databases are rejected until their layouts have been
 reviewed and tested.
+
+### Read-only indexing boundary
 
 A fresh scan follows this boundary:
 
@@ -69,6 +77,41 @@ The application:
 - replaces its SQLite index only after a complete extraction succeeds; and
 - preserves the previous index after cancellation, incompatibility, or scan
   failure.
+
+### Guarded whole-set deletion boundary
+
+The separate maintenance path is deliberately narrow:
+
+```text
+fresh verified index + selected difficulties
+                  |
+                  v
+       expand to complete beatmap sets
+                  |
+                  v
+schema/root/osu!/fingerprint/Protected checks
+                  |
+                  v
+app-owned recovery package
+  full client.realm copy
+  + every selected-set blob
+  + verified per-set .olz archives
+  + manifest
+                  |
+                  v
+re-check live graph and source fingerprint
+                  |
+                  v
+one Realm transaction: DeletePending = true
+                  |
+                  v
+osu! startup performs its own reference-aware cleanup
+```
+
+The manager never removes blobs from `files/`. Before osu! starts, a queued
+operation can be undone by clearing the same flags in one guarded transaction.
+After osu! has finalized cleanup, the retained `.olz` archives can be imported
+back into osu! manually.
 
 For the complete model map, discovery rules, field semantics, capability matrix,
 and upstream source references, read
@@ -110,6 +153,27 @@ If osu! starts during a scan, the database changes while it is copied, or the
 schema is unsupported, the scan stops and the last successful index remains
 available.
 
+## Deleting beatmap sets safely
+
+1. Exit osu!lazer completely and run a fresh scan.
+2. Select one or more difficulties. The preview expands the selection to every
+   complete set containing those difficulties; individual-difficulty deletion
+   is intentionally unavailable.
+3. Review the exact set count and logical size. The manager rechecks the data
+   root, schema 51, source fingerprint, process state, selected-set graph,
+   `Protected`, and `DeletePending` state.
+4. Type the displayed `DELETE 1 SET` or `DELETE N SETS` phrase exactly. Before
+   any write, the manager copies and verifies the full `client.realm`, every
+   unique blob referenced by the selected sets, a manifest, and one importable
+   `.olz` archive per set.
+5. The manager sets only `DeletePending = true` for those sets in one Realm
+   transaction. Start osu! to let its normal startup cleanup finalize deletion,
+   or use Recovery to undo the queued flags **before opening osu!**.
+
+Recovery packages are app-owned and retained after queuing. If osu! has already
+removed the pending records, automatic undo is no longer possible; import the
+verified `.olz` files instead.
+
 ## Searching
 
 Plain words search artist, title, difficulty, mapper, source, and tags. Tokens
@@ -135,13 +199,19 @@ relative-date operators.
 
 ## Current limitations
 
-- There is no supported osu!lazer mutation API, so the manager cannot delete,
-  hide, restore, quarantine, rename, or move beatmaps or hashed resources.
-- Collection membership editing, export, and duplicate analysis are not
-  available. Their visible controls and pages remain disabled or informational.
+- osu! exposes no supported external local-library maintenance API. Whole-set
+  deletion therefore follows a reviewed internal schema-51 lifecycle and may
+  stop working after an osu! update. Unknown schemas and shapes fail closed.
+- Only complete sets can be queued. Individual-difficulty deletion, hiding,
+  renaming, moving, collection membership editing, general-purpose export,
+  duplicate removal, and Realm repair remain unavailable.
+- Recovery `.olz` files are generated only as part of a verified deletion
+  package; they are not a general library-export feature.
 - Storage totals are **logical set sizes**, deduplicated only within each set.
   Blobs may be shared by other sets, scores, replays, or skins, so these totals
-  are not estimates of safely reclaimable disk space.
+  are not estimates or promises of disk space reclaimed by deletion.
+- The manager does not delete source blobs. osu! decides which unreferenced
+  blobs can be removed during its own startup cleanup.
 - `LastPlayed` is a recorded timestamp, not a full play history. Local score
   count measures stored score rows; osu!lazer does not persist a count of every
   play attempt in the indexed model.
@@ -209,7 +279,7 @@ checksums, and creates a GitHub Release with generated notes.
 .github/workflows/  CI and tagged-release automation
 docs/               storage integration and safety contract
 scripts/            build identity generation
-src/main/           Electron lifecycle, IPC, Realm scanner, SQLite index
+src/main/           Electron lifecycle, IPC, Realm scanner/index and guarded deletion manager
 src/preload/        narrow context-bridge API
 src/renderer/       React desktop interface
 src/shared/         shared contracts, IPC names, and quick-search parser

@@ -106,6 +106,15 @@ function TableRow({
       onDoubleClick={() =>
         onlineUrl && void window.libraryManager.openExternal(onlineUrl)
       }
+      onKeyDown={(event) => {
+        if (
+          event.target === event.currentTarget &&
+          (event.key === "Enter" || event.key === " ")
+        ) {
+          event.preventDefault();
+          onOpenDetails();
+        }
+      }}
       role="row"
       tabIndex={0}
     >
@@ -323,10 +332,22 @@ export function LibraryTable({
   };
 
   return (
-    <div className={`library-table density-${density}`}>
+    <div
+      aria-label="Beatmap difficulties"
+      aria-rowcount={counts.filteredDifficulties + 1}
+      className={`library-table density-${density}`}
+      role="table"
+    >
       <div className="table-header" role="row">
         {columns.map((column, index) => (
           <div
+            aria-sort={
+              column.field && query.sort.field === column.field
+                ? query.sort.direction === "asc"
+                  ? "ascending"
+                  : "descending"
+                : undefined
+            }
             className={`table-heading ${column.className}`}
             key={`${column.label}-${index}`}
             role="columnheader"

@@ -16,6 +16,10 @@ export const IPC = {
   deleteSavedSearch: "saved-searches:delete",
   operationHistory: "operations:get",
   copySelectionMetadata: "system:copy-selection-metadata",
+  previewDeletion: "deletion:preview",
+  executeDeletion: "deletion:execute",
+  getQuarantineRecords: "quarantine:get",
+  restoreQuarantine: "quarantine:restore",
   copyText: "system:copy-text",
   openExternal: "system:open-external",
 } as const;

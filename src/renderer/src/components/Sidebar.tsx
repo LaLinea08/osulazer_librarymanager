@@ -21,7 +21,7 @@ import {
   Star,
   type LucideIcon,
 } from "lucide-react";
-import type { SavedSearch } from "../../../shared/contracts";
+import type { LibraryStatus, SavedSearch } from "../../../shared/contracts";
 
 export type NavigationTarget =
   | "dashboard"
@@ -55,6 +55,7 @@ interface SidebarProps {
   active: NavigationTarget | `saved:${string}`;
   collapsed: boolean;
   savedSearches: SavedSearch[];
+  status: LibraryStatus;
   onNavigate: (target: NavigationTarget | `saved:${string}`) => void;
   onToggleCollapsed: () => void;
 }
@@ -85,7 +86,6 @@ const managementItems: NavigationItem[] = [
     id: "quarantine",
     label: "Quarantine",
     icon: ShieldCheck,
-    badge: "Unavailable",
   },
   { id: "history", label: "Operation History", icon: History },
 ];
@@ -93,27 +93,49 @@ const managementItems: NavigationItem[] = [
 function NavButton({
   item,
   active,
-  collapsed,
   onClick,
 }: {
   item: NavigationItem;
   active: boolean;
-  collapsed: boolean;
   onClick: () => void;
 }): React.JSX.Element {
   const Icon = item.icon;
   return (
     <button
       className={`sidebar-item ${active ? "active" : ""}`}
+      aria-current={active ? "page" : undefined}
       onClick={onClick}
-      title={collapsed ? item.label : undefined}
       type="button"
     >
       <Icon aria-hidden="true" size={17} strokeWidth={1.9} />
-      {!collapsed && <span>{item.label}</span>}
-      {!collapsed && item.badge && (
-        <span className="sidebar-badge">{item.badge}</span>
-      )}
+      <span>{item.label}</span>
+      {item.badge && <span className="sidebar-badge">{item.badge}</span>}
+    </button>
+  );
+}
+
+function RailButton({
+  label,
+  icon: Icon,
+  active,
+  onClick,
+}: {
+  label: string;
+  icon: LucideIcon;
+  active: boolean;
+  onClick: () => void;
+}): React.JSX.Element {
+  return (
+    <button
+      aria-current={active ? "page" : undefined}
+      aria-label={label}
+      className={`rail-button ${active ? "active" : ""}`}
+      onClick={onClick}
+      title={label}
+      type="button"
+    >
+      <Icon aria-hidden="true" size={20} strokeWidth={1.75} />
+      <span className="rail-tooltip">{label}</span>
     </button>
   );
 }
@@ -122,104 +144,199 @@ export function Sidebar({
   active,
   collapsed,
   savedSearches,
+  status,
   onNavigate,
   onToggleCollapsed,
 }: SidebarProps): React.JSX.Element {
+  const libraryActive =
+    active.startsWith("saved:") ||
+    new Set<string>([
+      "all",
+      "recent",
+      "played",
+      "never",
+      "ranked",
+      "loved",
+      "graveyard",
+      "mode-osu",
+      "mode-taiko",
+      "mode-catch",
+      "mode-mania",
+    ]).has(active);
+  const cleanupActive = new Set<string>([
+    "cleanup",
+    "collections",
+    "duplicates",
+    "quarantine",
+  ]).has(active);
+  const configuredPath = status.configuredPath ?? "Library not configured";
+  const pathParts = configuredPath.split(/[\\/]/).filter(Boolean);
+  const libraryFolder = pathParts.at(-1) ?? configuredPath;
+
   return (
     <aside className={`sidebar ${collapsed ? "collapsed" : ""}`}>
-      <div className="brand">
-        <div className="brand-mark" aria-hidden="true">
-          <span />
-        </div>
-        {!collapsed && (
-          <div>
-            <strong>lazer library</strong>
-            <span>manager</span>
+      <div className="nav-rail">
+        <div
+          aria-label="osu!lazer Library Manager"
+          className="rail-brand"
+          role="img"
+        >
+          <div className="brand-mark" aria-hidden="true">
+            <span />
           </div>
-        )}
+        </div>
+        <nav className="rail-navigation" aria-label="Workspace shortcuts">
+          <RailButton
+            active={active === "dashboard"}
+            icon={BarChart3}
+            label="Overview"
+            onClick={() => onNavigate("dashboard")}
+          />
+          <RailButton
+            active={libraryActive}
+            icon={Library}
+            label="Library"
+            onClick={() => onNavigate("all")}
+          />
+          <RailButton
+            active={active === "storage"}
+            icon={HardDrive}
+            label="Storage"
+            onClick={() => onNavigate("storage")}
+          />
+          <RailButton
+            active={cleanupActive}
+            icon={SearchCheck}
+            label="Cleanup"
+            onClick={() => onNavigate("cleanup")}
+          />
+          <RailButton
+            active={active === "history"}
+            icon={History}
+            label="History"
+            onClick={() => onNavigate("history")}
+          />
+        </nav>
+        <div className="rail-footer">
+          <RailButton
+            active={active === "settings"}
+            icon={Settings}
+            label="Settings"
+            onClick={() => onNavigate("settings")}
+          />
+          <button
+            aria-expanded={!collapsed}
+            aria-label={
+              collapsed ? "Show navigation panel" : "Hide navigation panel"
+            }
+            className="rail-button rail-collapse"
+            onClick={onToggleCollapsed}
+            title={
+              collapsed ? "Show navigation panel" : "Hide navigation panel"
+            }
+            type="button"
+          >
+            <ChevronLeft aria-hidden="true" size={18} />
+            <span className="rail-tooltip">
+              {collapsed ? "Show navigation" : "Hide navigation"}
+            </span>
+          </button>
+        </div>
       </div>
 
-      <nav className="sidebar-scroll" aria-label="Primary navigation">
-        <NavButton
-          active={active === "dashboard"}
-          collapsed={collapsed}
-          item={{ id: "dashboard", label: "Overview", icon: BarChart3 }}
-          onClick={() => onNavigate("dashboard")}
-        />
-
-        <div className="sidebar-section">
-          {!collapsed && <div className="sidebar-heading">Library</div>}
-          {libraryItems.map((item) => (
-            <NavButton
-              key={item.id}
-              active={active === item.id}
-              collapsed={collapsed}
-              item={item}
-              onClick={() => onNavigate(item.id)}
+      <div className="sidebar-panel">
+        <header className="library-identity">
+          <div className="library-avatar" aria-hidden="true">
+            <Library size={21} strokeWidth={1.7} />
+          </div>
+          <div className="library-identity-copy">
+            <span>Connected library</span>
+            <strong>osu!lazer</strong>
+            <small title={configuredPath}>{libraryFolder}</small>
+          </div>
+        </header>
+        <div
+          aria-label="Current library state"
+          className="library-state"
+          role="status"
+        >
+          <span>
+            <i aria-hidden="true" className="state-dot indexed" />
+            {status.indexedDifficulties.toLocaleString()} indexed
+          </span>
+          <span>
+            <i
+              aria-hidden="true"
+              className={`state-dot ${status.osuIsRunning ? "warning" : "ready"}`}
             />
-          ))}
+            {status.osuIsRunning ? "osu! is open" : "osu! is closed"}
+          </span>
         </div>
 
-        <div className="sidebar-section">
-          {!collapsed && <div className="sidebar-heading">Game modes</div>}
-          {modeItems.map((item) => (
-            <NavButton
-              key={item.id}
-              active={active === item.id}
-              collapsed={collapsed}
-              item={item}
-              onClick={() => onNavigate(item.id)}
-            />
-          ))}
-        </div>
+        <nav className="sidebar-scroll" aria-label="Library navigation">
+          <NavButton
+            active={active === "dashboard"}
+            item={{ id: "dashboard", label: "Overview", icon: BarChart3 }}
+            onClick={() => onNavigate("dashboard")}
+          />
 
-        <div className="sidebar-section">
-          {!collapsed && <div className="sidebar-heading">Management</div>}
-          {managementItems.map((item) => (
-            <NavButton
-              key={item.id}
-              active={active === item.id}
-              collapsed={collapsed}
-              item={item}
-              onClick={() => onNavigate(item.id)}
-            />
-          ))}
-        </div>
-
-        {savedSearches.length > 0 && (
           <div className="sidebar-section">
-            {!collapsed && <div className="sidebar-heading">Saved filters</div>}
-            {savedSearches.map((search) => (
-              <button
-                className={`sidebar-item ${active === `saved:${search.id}` ? "active" : ""}`}
-                key={search.id}
-                onClick={() => onNavigate(`saved:${search.id}`)}
-                title={collapsed ? search.name : undefined}
-                type="button"
-              >
-                <Gauge aria-hidden="true" size={17} />
-                {!collapsed && <span>{search.name}</span>}
-              </button>
+            <div className="sidebar-heading">Library</div>
+            {libraryItems.map((item) => (
+              <NavButton
+                key={item.id}
+                active={active === item.id}
+                item={item}
+                onClick={() => onNavigate(item.id)}
+              />
             ))}
           </div>
-        )}
-      </nav>
 
-      <div className="sidebar-footer">
-        <NavButton
-          active={active === "settings"}
-          collapsed={collapsed}
-          item={{ id: "settings", label: "Settings", icon: Settings }}
-          onClick={() => onNavigate("settings")}
-        />
-        <button
-          className="collapse-button"
-          onClick={onToggleCollapsed}
-          type="button"
-        >
-          <ChevronLeft size={15} />
-          {!collapsed && <span>Collapse</span>}
-        </button>
+          <div className="sidebar-section">
+            <div className="sidebar-heading">Game modes</div>
+            {modeItems.map((item) => (
+              <NavButton
+                key={item.id}
+                active={active === item.id}
+                item={item}
+                onClick={() => onNavigate(item.id)}
+              />
+            ))}
+          </div>
+
+          <div className="sidebar-section">
+            <div className="sidebar-heading">Management</div>
+            {managementItems.map((item) => (
+              <NavButton
+                key={item.id}
+                active={active === item.id}
+                item={item}
+                onClick={() => onNavigate(item.id)}
+              />
+            ))}
+          </div>
+
+          {savedSearches.length > 0 && (
+            <div className="sidebar-section">
+              <div className="sidebar-heading">Saved filters</div>
+              {savedSearches.map((search) => {
+                const searchActive = active === `saved:${search.id}`;
+                return (
+                  <button
+                    aria-current={searchActive ? "page" : undefined}
+                    className={`sidebar-item ${searchActive ? "active" : ""}`}
+                    key={search.id}
+                    onClick={() => onNavigate(`saved:${search.id}`)}
+                    type="button"
+                  >
+                    <Gauge aria-hidden="true" size={17} />
+                    <span>{search.name}</span>
+                  </button>
+                );
+              })}
+            </div>
+          )}
+        </nav>
       </div>
     </aside>
   );

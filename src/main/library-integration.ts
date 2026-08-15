@@ -1,5 +1,6 @@
 import { execFile } from "node:child_process";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
+import { createReadStream } from "node:fs";
 import { copyFile, mkdir, readFile, rm, stat } from "node:fs/promises";
 import { homedir, platform } from "node:os";
 import {
@@ -23,7 +24,7 @@ import type {
 } from "../shared/contracts";
 
 const executeFile = promisify(execFile);
-const VERIFIED_SCHEMA_VERSION = 51;
+export const VERIFIED_SCHEMA_VERSION = 51;
 const REQUIRED_SCHEMA: Record<string, string[]> = {
   BeatmapSet: [
     "ID",
@@ -32,6 +33,7 @@ const REQUIRED_SCHEMA: Record<string, string[]> = {
     "Beatmaps",
     "Files",
     "DeletePending",
+    "Protected",
   ],
   Beatmap: [
     "ID",
@@ -52,15 +54,16 @@ const REQUIRED_SCHEMA: Record<string, string[]> = {
   RealmNamedFileUsage: ["File", "Filename"],
 };
 
-const readOnlyCapabilities: LibraryCapabilities = {
+const protectedWriteCapabilities: LibraryCapabilities = {
   adapter: `osu!lazer Realm schema ${VERIFIED_SCHEMA_VERSION}`,
   readMetadata: true,
   readCollections: true,
   readPlayHistory: true,
   accurateStorage: true,
-  writeLibrary: false,
+  writeLibrary: true,
   limitations: [
-    "Read-only: this application never writes to osu!lazer’s Realm database or hashed file store.",
+    "Protected writes are limited to osu!lazer’s whole-set DeletePending flag while the game is closed.",
+    "Hashed resources are never deleted or moved directly; osu!lazer performs its normal reference-aware cleanup on its next start.",
     "Local score count is available, but osu!lazer does not persist every play attempt as a play counter.",
     "Storage values are logical set sizes; resources may be shared, so they are not deletion-recovery estimates.",
     "Star ratings reflect osu!lazer’s persisted base value and may be unavailable or differ under rulesets and mods.",
@@ -77,7 +80,7 @@ export const unavailableCapabilities: LibraryCapabilities = {
   limitations: [
     `Fresh indexing is enabled only for verified osu!lazer Realm schema ${VERIFIED_SCHEMA_VERSION}.`,
     "Cached library data remains available if a future osu!lazer version is not yet compatible.",
-    "Library modification is intentionally unavailable.",
+    "Deletion remains unavailable until a fresh scan verifies the supported schema and stable local set identifiers.",
   ],
 };
 
@@ -87,6 +90,7 @@ export interface RealmScanResult {
   schemaVersion: number;
   missingResources: number;
   collectionCount: number;
+  sourceFingerprint: string;
 }
 
 type DynamicObject = Record<string, unknown>;
@@ -115,7 +119,7 @@ function abortIfNeeded(signal: AbortSignal): void {
   }
 }
 
-function normalizedRoot(input: string): string {
+export function normalizedRoot(input: string): string {
   const candidate = normalize(resolve(input));
   return basename(candidate).toLowerCase() === "files"
     ? dirname(candidate)
@@ -202,23 +206,25 @@ export async function detectLibraryCandidates(): Promise<LibraryCandidate[]> {
   );
 }
 
-export async function isOsuRunning(): Promise<boolean> {
-  try {
-    if (platform() === "win32") {
-      const { stdout } = await executeFile("tasklist.exe", [
-        "/FO",
-        "CSV",
-        "/NH",
-      ]);
-      return stdout
-        .split(/\r?\n/)
-        .some((line) => /^"(?:osu!|osu|osulazer)\.exe"/i.test(line.trim()));
-    }
-    const { stdout } = await executeFile("ps", ["-A", "-o", "comm="]);
+export async function isOsuRunningStrict(): Promise<boolean> {
+  if (platform() === "win32") {
+    const { stdout } = await executeFile("tasklist.exe", ["/FO", "CSV", "/NH"]);
     return stdout
       .split(/\r?\n/)
-      .some((name) => /^(osu!|osu|osulazer)$/i.test(name.trim()));
+      .some((line) => /^"(?:osu!|osu|osulazer)\.exe"/i.test(line.trim()));
+  }
+  const { stdout } = await executeFile("ps", ["-A", "-o", "comm="]);
+  return stdout
+    .split(/\r?\n/)
+    .some((name) => /^(osu!|osu|osulazer)$/i.test(name.trim()));
+}
+
+export async function isOsuRunning(): Promise<boolean> {
+  try {
+    return await isOsuRunningStrict();
   } catch {
+    // Read-only status surfaces may treat an unavailable process list as
+    // "unknown/offline". Protected writes use isOsuRunningStrict instead.
     return false;
   }
 }
@@ -262,7 +268,7 @@ function date(value: unknown): string | null {
     : null;
 }
 
-function identifier(value: unknown, fallback = ""): string {
+export function realmIdentifier(value: unknown, fallback = ""): string {
   if (
     typeof value === "string" ||
     typeof value === "number" ||
@@ -301,8 +307,15 @@ function statusFromNumber(value: unknown): BeatmapStatus {
   return "unknown";
 }
 
-function hashPath(fileStore: string, hash: string): string {
+export function hashPath(fileStore: string, hash: string): string {
   return join(fileStore, hash.slice(0, 1), hash.slice(0, 2), hash);
+}
+
+export async function sha256File(path: string): Promise<string> {
+  const digest = createHash("sha256");
+  const stream = createReadStream(path);
+  for await (const chunk of stream) digest.update(chunk as Buffer);
+  return digest.digest("hex");
 }
 
 async function collectResourceSizes(
@@ -350,7 +363,7 @@ async function collectResourceSizes(
   return { sizes, missing };
 }
 
-function validateSchema(realm: Realm, schemaVersion: number): void {
+export function validateSchema(realm: Realm, schemaVersion: number): void {
   if (schemaVersion !== VERIFIED_SCHEMA_VERSION) {
     throw new LibraryIntegrationError(
       "UNSUPPORTED_SCHEMA",
@@ -467,7 +480,7 @@ export async function scanRealmLibrary(
       for (const rawScore of realm.objects("Score")) {
         const score = rawScore as unknown as DynamicObject;
         const linkedBeatmap = object(score.BeatmapInfo);
-        const linkedId = linkedBeatmap ? String(linkedBeatmap.ID) : "";
+        const linkedId = linkedBeatmap ? realmIdentifier(linkedBeatmap.ID) : "";
         const hash = string(score.BeatmapHash);
         const key = linkedId || hash;
         if (key) scoreCounts.set(key, (scoreCounts.get(key) ?? 0) + 1);
@@ -483,7 +496,7 @@ export async function scanRealmLibrary(
         abortIfNeeded(signal);
         const set = sets[setIndex] as unknown as DynamicObject;
         if (set.DeletePending) continue;
-        const setKey = identifier(set.ID, randomUUID());
+        const setKey = realmIdentifier(set.ID, randomUUID());
         const resources = list(set.Files);
         const filenameToHash = new Map<string, string>();
         const resourceHashes = new Set<string>();
@@ -508,20 +521,22 @@ export async function scanRealmLibrary(
           const difficulty = object(beatmap.Difficulty);
           const author = object(metadata?.Author);
           const hash = string(beatmap.Hash).toLowerCase();
-          const id = identifier(
+          const id = realmIdentifier(
             beatmap.ID,
             `${setKey}:${hash || randomUUID()}`,
           );
           const background = string(metadata?.BackgroundFile);
           const userTags = strings(metadata?.UserTags);
           const rawStarRating = number(beatmap.StarRating, -1);
-          const scoreKey = identifier(beatmap.ID);
+          const scoreKey = realmIdentifier(beatmap.ID);
           const scoreHashKey = hash;
 
           draftRecords.push({
             id,
             beatmapId: positiveOnlineId(beatmap.OnlineID),
             beatmapSetId: positiveOnlineId(set.OnlineID),
+            beatmapSetLocalId: setKey,
+            setProtected: Boolean(set.Protected),
             artist: string(metadata?.Artist, "Unknown artist"),
             title: string(metadata?.Title, "Unknown title"),
             difficultyName: string(
@@ -584,6 +599,17 @@ export async function scanRealmLibrary(
       const collectionCount = realm.objects("BeatmapCollection").length;
       realm.close();
 
+      onProgress({
+        phase: "parsing",
+        processed: draftRecords.length,
+        discovered: draftRecords.length,
+        imported: draftRecords.length,
+        skipped: 0,
+        message: "Fingerprinting the verified Realm snapshot…",
+      });
+      const sourceFingerprint = await sha256File(snapshot.path);
+      abortIfNeeded(signal);
+
       const { sizes, missing } = await collectResourceSizes(
         join(libraryRoot, "files"),
         allResourceHashes,
@@ -618,10 +644,11 @@ export async function scanRealmLibrary(
 
       return {
         records,
-        capabilities: readOnlyCapabilities,
+        capabilities: protectedWriteCapabilities,
         schemaVersion,
         missingResources: missing,
         collectionCount,
+        sourceFingerprint,
       };
     } finally {
       if (!realm.isClosed) realm.close();

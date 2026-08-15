@@ -1,16 +1,14 @@
 import { useState } from "react";
 import {
-  AlertTriangle,
   BookmarkPlus,
   Copy,
   Download,
   FolderPlus,
-  ShieldX,
   Trash2,
   X,
 } from "lucide-react";
-import type { BeatmapDifficulty } from "../../../shared/contracts";
-import { formatBytes } from "../lib/format";
+
+export { ProtectedDeletionModal } from "./DeletionModal";
 
 interface BulkToolbarProps {
   selectedCount: number;
@@ -58,7 +56,7 @@ export function BulkToolbar({
       </button>
       <div className="spacer" />
       <button className="danger-action" onClick={onDelete} type="button">
-        <Trash2 size={15} /> Delete
+        <Trash2 size={15} /> Review deletion
       </button>
       <button
         aria-label="Clear selection"
@@ -68,127 +66,6 @@ export function BulkToolbar({
       >
         <X size={17} />
       </button>
-    </div>
-  );
-}
-
-interface DeleteSafetyModalProps {
-  open: boolean;
-  selectedCount: number;
-  filteredSets: number;
-  logicalBytes: number;
-  filterLabels: string[];
-  examples: BeatmapDifficulty[];
-  onClose: () => void;
-}
-
-export function DeleteSafetyModal({
-  open,
-  selectedCount,
-  filteredSets,
-  logicalBytes,
-  filterLabels,
-  examples,
-  onClose,
-}: DeleteSafetyModalProps): React.JSX.Element | null {
-  if (!open) return null;
-  return (
-    <div className="modal-backdrop" onMouseDown={onClose} role="presentation">
-      <section
-        aria-labelledby="delete-preview-title"
-        aria-modal="true"
-        className="modal safety-modal"
-        onMouseDown={(event) => event.stopPropagation()}
-        role="dialog"
-      >
-        <header className="modal-header danger-header">
-          <div className="danger-modal-icon">
-            <AlertTriangle size={23} />
-          </div>
-          <div>
-            <span className="eyebrow">Operation preview</span>
-            <h2 id="delete-preview-title">
-              Deletion is blocked by the safety layer
-            </h2>
-            <p>
-              The selection is summarized below, but this build cannot safely
-              modify osu!lazer.
-            </p>
-          </div>
-          <button
-            aria-label="Close preview"
-            className="icon-button"
-            onClick={onClose}
-            type="button"
-          >
-            <X size={19} />
-          </button>
-        </header>
-        <div className="modal-content">
-          <div className="preview-summary">
-            <div>
-              <span>Selected difficulties</span>
-              <strong>{selectedCount.toLocaleString()}</strong>
-            </div>
-            <div>
-              <span>Matching sets</span>
-              <strong>{filteredSets.toLocaleString()}</strong>
-            </div>
-            <div>
-              <span>Logical set resources</span>
-              <strong>{formatBytes(logicalBytes)}</strong>
-            </div>
-          </div>
-          <section className="preview-section">
-            <h3>Filters responsible</h3>
-            {filterLabels.length ? (
-              <div className="preview-chips">
-                {filterLabels.map((label) => (
-                  <span key={label}>{label}</span>
-                ))}
-              </div>
-            ) : (
-              <p>No filters — items were selected manually.</p>
-            )}
-          </section>
-          <section className="preview-section">
-            <h3>Representative difficulties</h3>
-            <div className="preview-examples">
-              {examples.slice(0, 5).map((record) => (
-                <div key={record.id}>
-                  <strong>
-                    {record.artist} – {record.title}
-                  </strong>
-                  <span>
-                    {record.difficultyName} · {record.mapper}
-                  </span>
-                </div>
-              ))}
-            </div>
-          </section>
-          <div className="blocked-explanation">
-            <ShieldX size={21} />
-            <div>
-              <strong>Why this cannot continue</strong>
-              <p>
-                osu!lazer stores resources as shared SHA-256 blobs and manages
-                deletion through Realm lifecycle rules. There is no supported
-                external mutation API, so moving blobs or editing Realm would
-                risk corruption.
-              </p>
-            </div>
-          </div>
-        </div>
-        <footer className="modal-footer">
-          <button className="secondary-button" onClick={onClose} type="button">
-            Close preview
-          </button>
-          <div className="spacer" />
-          <button className="danger-button" disabled type="button">
-            <Trash2 size={15} /> Delete unavailable
-          </button>
-        </footer>
-      </section>
     </div>
   );
 }

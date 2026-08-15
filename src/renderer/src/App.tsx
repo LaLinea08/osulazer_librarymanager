@@ -12,6 +12,7 @@ import type {
   AppBuildInfo,
   AppSettings,
   BeatmapDifficulty,
+  DeletionResult,
   FilterCondition,
   FilterGroup,
   LibraryQuery,
@@ -19,8 +20,10 @@ import type {
   LibraryStatistics,
   LibraryStatus,
   OperationRecord,
+  QuarantineRecord,
   SavedSearch,
   ScanProgress,
+  SerializableSelection,
   SortField,
 } from "../../shared/contracts";
 import { EMPTY_FILTER_GROUP } from "../../shared/contracts";
@@ -36,7 +39,7 @@ import {
 } from "../../shared/selection";
 import {
   BulkToolbar,
-  DeleteSafetyModal,
+  ProtectedDeletionModal,
   SaveSearchModal,
 } from "./components/ActionModals";
 import { Dashboard } from "./components/Dashboard";
@@ -49,6 +52,7 @@ import {
   CleanupPage,
   FeaturePlaceholder,
   HistoryPage,
+  QuarantinePage,
   SettingsPage,
   StoragePage,
 } from "./components/Pages";
@@ -193,6 +197,9 @@ export function App(): React.JSX.Element {
   const [settings, setSettings] = useState<AppSettings | null>(null);
   const [savedSearches, setSavedSearches] = useState<SavedSearch[]>([]);
   const [operations, setOperations] = useState<OperationRecord[]>([]);
+  const [quarantineRecords, setQuarantineRecords] = useState<
+    QuarantineRecord[]
+  >([]);
   const [statistics, setStatistics] = useState<LibraryStatistics | null>(null);
   const [statisticsLoading, setStatisticsLoading] = useState(false);
   const [active, setActive] = useState<NavigationTarget | `saved:${string}`>(
@@ -223,7 +230,10 @@ export function App(): React.JSX.Element {
   const [refreshKey, setRefreshKey] = useState(0);
   const [filterBuilderOpen, setFilterBuilderOpen] = useState(false);
   const [saveSearchOpen, setSaveSearchOpen] = useState(false);
-  const [deletePreviewOpen, setDeletePreviewOpen] = useState(false);
+  const [deletionRequest, setDeletionRequest] = useState<{
+    query: LibraryQuery;
+    selection: SerializableSelection;
+  } | null>(null);
   const [toast, setToast] = useState<string | null>(null);
 
   useEffect(() => {
@@ -250,15 +260,24 @@ export function App(): React.JSX.Element {
       window.libraryManager.getSettings(),
       window.libraryManager.getSavedSearches(),
       window.libraryManager.getOperationHistory(),
+      window.libraryManager.getQuarantineRecords(),
     ])
       .then(
-        async ([nextBuild, nextStatus, nextSettings, searches, history]) => {
+        async ([
+          nextBuild,
+          nextStatus,
+          nextSettings,
+          searches,
+          history,
+          quarantine,
+        ]) => {
           if (!activeEffect) return;
           setBuild(nextBuild);
           setStatus(nextStatus);
           setSettings(nextSettings);
           setSavedSearches(searches);
           setOperations(history);
+          setQuarantineRecords(quarantine);
           if (nextStatus.indexedDifficulties > 0) await refreshStatistics();
         },
       )
@@ -323,6 +342,57 @@ export function App(): React.JSX.Element {
     ...parsedSearch.conditions,
   ];
 
+  const openDeletionPreview = useCallback((): void => {
+    setDeletionRequest({
+      query: structuredClone({
+        ...queryBase,
+        offset: 0,
+        limit: 200,
+      }),
+      selection: {
+        mode: selection.mode,
+        included: [...selection.included],
+        excluded: [...selection.excluded],
+      },
+    });
+  }, [queryBase, selection]);
+
+  const refreshQuarantine = useCallback(async (): Promise<void> => {
+    const [nextStatus, records] = await Promise.all([
+      window.libraryManager.getLibraryStatus(),
+      window.libraryManager.getQuarantineRecords(),
+    ]);
+    setStatus(nextStatus);
+    setQuarantineRecords(records);
+  }, []);
+
+  const refreshAfterMutation = useCallback(
+    async (result: DeletionResult): Promise<void> => {
+      const [nextStatus, history, quarantine] = await Promise.all([
+        window.libraryManager.getLibraryStatus(),
+        window.libraryManager.getOperationHistory(),
+        window.libraryManager.getQuarantineRecords(),
+      ]);
+      setStatus(nextStatus);
+      setOperations(history);
+      setQuarantineRecords(quarantine);
+      setSelection(emptySelection());
+      setDetails(null);
+      setRefreshKey((value) => value + 1);
+      if (nextStatus.indexedDifficulties > 0) await refreshStatistics();
+      setToast(result.message);
+    },
+    [refreshStatistics],
+  );
+
+  const restoreQuarantineRecord = async (
+    operationId: string,
+  ): Promise<DeletionResult> => {
+    const result = await window.libraryManager.restoreQuarantine(operationId);
+    await refreshAfterMutation(result);
+    return result;
+  };
+
   const setLibrary = async (path: string): Promise<void> => {
     const nextStatus = await window.libraryManager.setLibraryPath(path);
     setStatus(nextStatus);
@@ -360,6 +430,14 @@ export function App(): React.JSX.Element {
   const navigate = (target: NavigationTarget | `saved:${string}`): void => {
     setActive(target);
     setDetails(null);
+    if (target === "quarantine")
+      void refreshQuarantine().catch((caught: unknown) =>
+        setToast(
+          caught instanceof Error
+            ? caught.message
+            : "Recovery records could not be refreshed.",
+        ),
+      );
     if (target.startsWith("saved:")) {
       const saved = savedSearches.find((item) => `saved:${item.id}` === target);
       if (saved) {
@@ -487,17 +565,24 @@ export function App(): React.JSX.Element {
         setSelection(selectAllFiltered());
       } else if (event.key === "Delete" && selectedTotal > 0 && !editing) {
         event.preventDefault();
-        setDeletePreviewOpen(true);
+        openDeletionPreview();
       } else if (event.key === "Escape") {
-        if (deletePreviewOpen) setDeletePreviewOpen(false);
-        else if (filterBuilderOpen) setFilterBuilderOpen(false);
+        if (deletionRequest) return;
+        if (filterBuilderOpen) setFilterBuilderOpen(false);
         else if (details) setDetails(null);
         else setSelection(emptySelection());
       }
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, [active, deletePreviewOpen, details, filterBuilderOpen, selectedTotal]);
+  }, [
+    active,
+    deletionRequest,
+    details,
+    filterBuilderOpen,
+    openDeletionPreview,
+    selectedTotal,
+  ]);
 
   if (loading) {
     return (
@@ -532,11 +617,6 @@ export function App(): React.JSX.Element {
 
   const libraryPage = isLibraryTarget(active);
   const title = pageTitle(active, savedSearches);
-  const loadedSelected = [...loadedRecords.values()].filter((record) =>
-    selection.mode === "all-filtered"
-      ? !selection.excluded.has(record.id)
-      : selection.included.has(record.id),
-  );
 
   return (
     <div className={`app-shell ${details ? "details-open" : ""}`}>
@@ -546,6 +626,7 @@ export function App(): React.JSX.Element {
         onNavigate={navigate}
         onToggleCollapsed={() => setCollapsedSidebar((value) => !value)}
         savedSearches={savedSearches}
+        status={status}
       />
       <main className="workspace">
         <header className="topbar">
@@ -560,7 +641,10 @@ export function App(): React.JSX.Element {
               </span>
             )}
             <span className="readonly-pill">
-              <ShieldCheck size={14} /> Read-only
+              <ShieldCheck size={14} />
+              {status.capabilities.writeLibrary
+                ? "Protected writes"
+                : "Read-only compatibility"}
             </span>
             <button
               className="scan-button"
@@ -693,7 +777,7 @@ export function App(): React.JSX.Element {
               <BulkToolbar
                 onClear={() => setSelection(emptySelection())}
                 onCopy={() => void copySelection()}
-                onDelete={() => setDeletePreviewOpen(true)}
+                onDelete={openDeletionPreview}
                 onInvert={() =>
                   setSelection((current) =>
                     invertVisible(current, [...loadedRecords.keys()]),
@@ -743,6 +827,13 @@ export function App(): React.JSX.Element {
           />
         ) : active === "cleanup" ? (
           <CleanupPage onPreset={applyCleanupPreset} />
+        ) : active === "quarantine" ? (
+          <QuarantinePage
+            onRefresh={refreshQuarantine}
+            onRestore={restoreQuarantineRecord}
+            osuIsRunning={status.osuIsRunning}
+            records={quarantineRecords}
+          />
         ) : active === "history" ? (
           <HistoryPage operations={operations} />
         ) : active === "settings" ? (
@@ -759,9 +850,7 @@ export function App(): React.JSX.Element {
             settings={settings}
             status={status}
           />
-        ) : active === "collections" ||
-          active === "duplicates" ||
-          active === "quarantine" ? (
+        ) : active === "collections" || active === "duplicates" ? (
           <FeaturePlaceholder type={active} />
         ) : (
           <FeaturePlaceholder type="duplicates" />
@@ -784,15 +873,16 @@ export function App(): React.JSX.Element {
           open
         />
       )}
-      <DeleteSafetyModal
-        examples={loadedSelected}
-        filterLabels={allFilterConditions.map(conditionLabel)}
-        filteredSets={counts.filteredSets}
-        logicalBytes={counts.filteredBytes}
-        onClose={() => setDeletePreviewOpen(false)}
-        open={deletePreviewOpen}
-        selectedCount={selectedTotal}
-      />
+      {deletionRequest && (
+        <ProtectedDeletionModal
+          filterLabels={allFilterConditions.map(conditionLabel)}
+          onClose={() => setDeletionRequest(null)}
+          onMutation={refreshAfterMutation}
+          open
+          query={deletionRequest.query}
+          selection={deletionRequest.selection}
+        />
+      )}
       {toast && (
         <div className="toast">
           <Check size={15} /> {toast}

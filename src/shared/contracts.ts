@@ -14,6 +14,8 @@ export interface BeatmapDifficulty {
   id: string;
   beatmapId: number | null;
   beatmapSetId: number | null;
+  beatmapSetLocalId: string;
+  setProtected: boolean;
   artist: string;
   title: string;
   difficultyName: string;
@@ -213,7 +215,7 @@ export interface AppSettings {
   theme: "dark" | "light" | "system";
   density: "compact" | "comfortable";
   scanOnStartup: boolean;
-  readOnlyMode: true;
+  protectedWriteMode: true;
 }
 
 export interface AppBuildInfo {
@@ -227,6 +229,108 @@ export interface SerializableSelection {
   mode: "explicit" | "all-filtered";
   included: string[];
   excluded: string[];
+}
+
+export interface DeletionPreviewExample {
+  beatmapSetId: number | null;
+  artist: string;
+  title: string;
+  mapper: string;
+  difficultyCount: number;
+  logicalBytes: number;
+}
+
+export interface DeletionPreview {
+  previewId: string;
+  createdAt: string;
+  expiresAt: string;
+  sourceFingerprint: string;
+  selectedDifficulties: number;
+  affectedDifficulties: number;
+  affectedSets: number;
+  logicalBytes: number;
+  uniqueBackupBytes: number;
+  protectedSets: number;
+  examples: DeletionPreviewExample[];
+  blockers: string[];
+  confirmationPhrase: string;
+  canExecute: boolean;
+}
+
+export type QuarantineStatus =
+  "preparing" | "ready" | "queued" | "restored" | "finalized" | "failed";
+
+export interface DeletionBackupResource {
+  hash: string;
+  filename: string;
+  size: number;
+  backupRelativePath: string;
+}
+
+export interface DeletionBackupSet {
+  beatmapSetLocalId: string;
+  beatmapSetId: number | null;
+  artist: string;
+  title: string;
+  mapper: string;
+  difficultyIds: string[];
+  resources: DeletionBackupResource[];
+  archiveRelativePath: string;
+  archiveSha256: string | null;
+  archiveSize: number;
+}
+
+export interface DeletionBackupManifest {
+  version: 1;
+  appVersion: string;
+  realmSchemaVersion: number;
+  operationId: string;
+  createdAt: string;
+  updatedAt: string;
+  status: QuarantineStatus;
+  libraryPath: string;
+  sourceFingerprint: string;
+  postMutationFingerprint: string | null;
+  realmBackupRelativePath: string;
+  affectedDifficulties: number;
+  affectedSets: number;
+  logicalBytes: number;
+  uniqueBackupBytes: number;
+  sets: DeletionBackupSet[];
+  details: string | null;
+}
+
+export interface DeletionResult {
+  operationId: string;
+  status: QuarantineStatus;
+  affectedDifficulties: number;
+  affectedSets: number;
+  logicalBytes: number;
+  uniqueBackupBytes: number;
+  backupPath: string;
+  indexRefreshed: boolean;
+  canRestore: boolean;
+  restoreBlockedReason: string | null;
+  message: string;
+}
+
+export interface QuarantineRecord {
+  operationId: string;
+  createdAt: string;
+  updatedAt: string;
+  libraryPath: string;
+  status: QuarantineStatus;
+  summary: string;
+  affectedDifficulties: number;
+  affectedSets: number;
+  logicalBytes: number;
+  uniqueBackupBytes: number;
+  backupPath: string;
+  sourceFingerprint: string;
+  postMutationFingerprint: string | null;
+  canRestore: boolean;
+  restoreBlockedReason: string | null;
+  details: string | null;
 }
 
 export interface AppApi {
@@ -253,6 +357,16 @@ export interface AppApi {
     query: LibraryQuery,
     selection: SerializableSelection,
   ) => Promise<number>;
+  previewDeletion: (
+    query: LibraryQuery,
+    selection: SerializableSelection,
+  ) => Promise<DeletionPreview>;
+  executeDeletion: (
+    previewId: string,
+    confirmationPhrase: string,
+  ) => Promise<DeletionResult>;
+  getQuarantineRecords: () => Promise<QuarantineRecord[]>;
+  restoreQuarantine: (operationId: string) => Promise<DeletionResult>;
   copyText: (text: string) => Promise<void>;
   openExternal: (url: string) => Promise<void>;
 }

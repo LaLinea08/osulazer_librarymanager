@@ -12,6 +12,8 @@ const screenshots = {
   onboarding: resolve("dist", "smoke-onboarding.png"),
   dashboard: resolve("dist", "smoke-dashboard.png"),
   library: resolve("dist", "smoke-library.png"),
+  deletionReview: resolve("dist", "smoke-deletion-review.png"),
+  quarantine: resolve("dist", "smoke-quarantine.png"),
 };
 const userData = await mkdtemp(join(tmpdir(), "osu-library-manager-smoke-"));
 const environment = { ...process.env };
@@ -61,6 +63,24 @@ try {
     .first()
     .waitFor({ state: "visible", timeout: 20_000 });
   await page.screenshot({ path: screenshots.library, fullPage: true });
+
+  const firstRow = page.locator(".table-row:not(.skeleton-row)").first();
+  await firstRow.getByRole("checkbox").check();
+  await page.getByRole("button", { name: "Review deletion" }).click();
+  await page
+    .getByRole("heading", { name: "Review whole-set deletion" })
+    .waitFor({ state: "visible", timeout: 20_000 });
+  await page
+    .locator(".protected-delete-modal .preview-summary")
+    .waitFor({ state: "visible", timeout: 20_000 });
+  await page.screenshot({ path: screenshots.deletionReview, fullPage: true });
+  await page.getByRole("button", { name: "Cancel" }).click();
+
+  await page.getByRole("button", { name: "Quarantine" }).first().click();
+  await page
+    .getByRole("heading", { name: "Quarantine & restore" })
+    .waitFor({ state: "visible" });
+  await page.screenshot({ path: screenshots.quarantine, fullPage: true });
 
   const realmAfter = realmPath ? await stat(realmPath).catch(() => null) : null;
   const sourceUnchanged =

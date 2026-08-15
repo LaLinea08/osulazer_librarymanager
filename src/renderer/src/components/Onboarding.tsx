@@ -75,8 +75,8 @@ export function Onboarding({
             <h1>Take control of your library. Safely.</h1>
             <p>
               Search, inspect, and organize tens of thousands of osu!lazer
-              beatmaps from a fast local index. Your game database is never
-              modified.
+              beatmaps from a fast local index. Protected deletion is isolated
+              behind verified backups and explicit confirmation.
             </p>
             <ol className="onboarding-steps">
               <li className="active">
@@ -179,10 +179,11 @@ export function Onboarding({
             <div className="safety-note">
               <ShieldCheck size={18} />
               <div>
-                <strong>Read-only by design</strong>
+                <strong>Safety-first by design</strong>
                 <span>
-                  Deletion and collection writes are disabled until a supported
-                  osu! workflow exists.
+                  Indexing is read-only. Protected whole-set deletion is enabled
+                  only after a verified scan, recovery backup, and explicit
+                  confirmation.
                 </span>
               </div>
             </div>

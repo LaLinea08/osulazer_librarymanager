@@ -39,7 +39,11 @@ describe.runIf(Boolean(liveRoot))("live osu!lazer Realm integration", () => {
     expect(result.schemaVersion).toBe(51);
     expect(result.records.length).toBeGreaterThan(0);
     expect(result.records.every((record) => record.id.length > 0)).toBe(true);
-    expect(result.capabilities.writeLibrary).toBe(false);
+    expect(
+      result.records.every((record) => record.beatmapSetLocalId.length > 0),
+    ).toBe(true);
+    expect(result.sourceFingerprint).toMatch(/^[0-9a-f]{64}$/);
+    expect(result.capabilities.writeLibrary).toBe(true);
     expect(after.size).toBe(before.size);
     expect(after.mtimeMs).toBe(before.mtimeMs);
     expect(await readdir(snapshots)).toEqual([]);
@@ -48,7 +52,7 @@ describe.runIf(Boolean(liveRoot))("live osu!lazer Realm integration", () => {
       join(temporaryDirectory, "integration.sqlite"),
     );
     try {
-      database.replaceBeatmaps(result.records, root);
+      database.replaceBeatmaps(result.records, root, result.sourceFingerprint);
       const query = database.query({
         text: "",
         filters: EMPTY_FILTER_GROUP,
